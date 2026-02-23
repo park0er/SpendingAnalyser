@@ -8,17 +8,18 @@ export async function fetchJSON(endpoint, params = {}) {
     });
     const qs = searchParams.toString();
     if (qs) url += '?' + qs;
-
     const res = await fetch(url);
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
 }
 
 export const api = {
-    summary: () => fetchJSON('/summary'),
-    byCategory: (level = 'l1') => fetchJSON('/by-category', { level }),
-    byPeriod: (granularity = 'month') => fetchJSON('/by-period', { granularity }),
-    topMerchants: (limit = 15) => fetchJSON('/top-merchants', { limit }),
-    cashflowSummary: () => fetchJSON('/cashflow-summary'),
-    transactions: (params = {}) => fetchJSON('/transactions', params),
+    meta: () => fetchJSON('/meta'),
+    summary: (f) => fetchJSON('/summary', f),
+    byCategory: (f, level = 'l1') => fetchJSON('/by-category', { ...f, level }),
+    byPeriod: (f, granularity = 'month') => fetchJSON('/by-period', { ...f, granularity }),
+    topMerchants: (f, limit = 15) => fetchJSON('/top-merchants', { ...f, limit }),
+    topCategories: (f, level = 'l1', limit = 20) => fetchJSON('/top-categories', { ...f, level, limit }),
+    cashflowSummary: (f) => fetchJSON('/cashflow-summary', f),
+    transactions: (params) => fetchJSON('/transactions', params),
 };
