@@ -8,7 +8,7 @@ export async function fetchJSON(endpoint, params = {}) {
     });
     const qs = searchParams.toString();
     if (qs) url += '?' + qs;
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
 }

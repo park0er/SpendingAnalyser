@@ -78,11 +78,14 @@ def _apply_global_filters(df: pd.DataFrame) -> pd.DataFrame:
     if category:
         df = df[df["global_category_l1"] == category]
 
-    # Category exclude (L1) — comma-separated
+    # Category exclude (L1 or L2) — comma-separated
     exclude_cats = request.args.get("exclude_categories")
     if exclude_cats:
         excludes = [c.strip() for c in exclude_cats.split(",")]
-        df = df[~df["global_category_l1"].isin(excludes)]
+        df = df[
+            (~df["global_category_l1"].isin(excludes)) & 
+            (~df["global_category_l2"].isin(excludes))
+        ]
 
     # L2 category filter
     category_l2 = request.args.get("category_l2")
