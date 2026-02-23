@@ -38,6 +38,9 @@ def _get_df() -> pd.DataFrame:
             _df["effective_amount"] = _df["effective_amount"].fillna(0).astype(float)
             _df["global_category_l1"] = _df["global_category_l1"].fillna("")
             _df["global_category_l2"] = _df["global_category_l2"].fillna("")
+            _df["counterparty"] = _df["counterparty"].fillna("")
+            _df["description"] = _df["description"].fillna("")
+            _df["payment_method"] = _df["payment_method"].fillna("")
         else:
             _df = run_pipeline(DATA_DIR, OUTPUT_DIR)
     return _df

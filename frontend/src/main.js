@@ -16,8 +16,9 @@ function fmt(n) {
 let taxonomyData = [];
 let excludedCategories = [];
 
-// Track if pie chart is drilling down into an L1 category
+// Track if pie chart is drilling down
 let pieDrillDownL1 = null;
+let pieDrillDownL2 = null;
 
 function getFilters() {
     const f = {};
@@ -39,7 +40,10 @@ function getFilters() {
     if (category) f.category = category;
     else if (pieDrillDownL1) f.category = pieDrillDownL1;
 
+    // Drill-down overrides L2 if not explicitly set
     if (categoryL2) f.category_l2 = categoryL2;
+    else if (pieDrillDownL2) f.category_l2 = pieDrillDownL2;
+
     if (dateFrom) f.date_from = dateFrom;
     if (dateTo) f.date_to = dateTo;
     if (excludedCategories.length > 0) f.exclude_categories = excludedCategories.join(',');
@@ -164,7 +168,11 @@ async function loadCategoryPie() {
     const filters = getFilters();
 
     // If we are drilling down or filtering by L1, show L2 distribution
-    const level = (filters.category || pieDrillDownL1) ? 'l2' : 'l1';
+    // If we are drilling down into L2, pie chart won't drill further, it just shows that single L2 slice (or L3 if we had it, but we don't)
+    // To keep it useful, if pieDrillDownL2 is active, the pie still shows the L2 slice, but it's 100% of itself.
+    let level = 'l1';
+    if (filters.category || pieDrillDownL1) level = 'l2';
+
     const data = await api.byCategory(filters, level);
 
     const labels = data.map(d => level === 'l1' ? (d.global_category_l1 || '未分类') : (d.global_category_l2 || '未分类'));
@@ -176,10 +184,22 @@ async function loadCategoryPie() {
 
     // Update header to indicate drill-down
     const header = canvas.parentElement.querySelector('h2');
-    if (pieDrillDownL1 && !document.getElementById('f-category').value) {
-        header.innerHTML = `分类支出 <span style="font-size:12px;color:#5b8def;cursor:pointer" id="reset-drill">(退出: ${pieDrillDownL1}) ✕</span>`;
-        document.getElementById('reset-drill').addEventListener('click', () => {
+
+    // Check if global filters are actively driving this vs pie clicks
+    const hasGlobalL1 = !!document.getElementById('f-category').value;
+    const hasGlobalL2 = !!document.getElementById('f-category-l2').value;
+
+    if (pieDrillDownL2 && !hasGlobalL2) {
+        header.innerHTML = `分类支出 <span style="font-size:12px;color:#5b8def;cursor:pointer" id="reset-drill-l2">(退出: ${pieDrillDownL2}) ✕</span>`;
+        document.getElementById('reset-drill-l2').addEventListener('click', () => {
+            pieDrillDownL2 = null;
+            refreshAll();
+        });
+    } else if (pieDrillDownL1 && !hasGlobalL1) {
+        header.innerHTML = `分类支出 <span style="font-size:12px;color:#5b8def;cursor:pointer" id="reset-drill-l1">(退出: ${pieDrillDownL1}) ✕</span>`;
+        document.getElementById('reset-drill-l1').addEventListener('click', () => {
             pieDrillDownL1 = null;
+            pieDrillDownL2 = null;
             refreshAll();
         });
     } else if (level === 'l2') {
@@ -203,10 +223,18 @@ async function loadCategoryPie() {
             responsive: true,
             maintainAspectRatio: true,
             onClick: (e, items) => {
-                if (items.length > 0 && level === 'l1') {
+                if (items.length > 0) {
                     const idx = items[0].index;
-                    pieDrillDownL1 = labels[idx];
-                    refreshAll();
+                    if (level === 'l1' && !pieDrillDownL1) {
+                        pieDrillDownL1 = labels[idx];
+                        refreshAll();
+                    } else if (level === 'l2' && !pieDrillDownL2) {
+                        const selectedL2 = labels[idx] === '未分类' ? '' : labels[idx];
+                        pieDrillDownL2 = selectedL2;
+                        refreshAll();
+                        // Scroll down to the table so the user can see the filtered result
+                        document.getElementById('tx-table').scrollIntoView({ behavior: 'smooth' });
+                    }
                 }
             },
             plugins: {
@@ -555,6 +583,7 @@ async function refreshAll() {
 function setupListeners() {
     document.getElementById('btn-apply').addEventListener('click', () => {
         pieDrillDownL1 = null; // reset drill-down on new explicit filter
+        pieDrillDownL2 = null;
         refreshAll();
     });
 
@@ -570,6 +599,7 @@ function setupListeners() {
         document.getElementById('search-input').value = '';
         excludedCategories = [];
         pieDrillDownL1 = null;
+        pieDrillDownL2 = null;
         renderExcludeTags();
         updateL2Options();
         refreshAll();
