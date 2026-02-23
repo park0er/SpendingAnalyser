@@ -13,6 +13,18 @@ export async function fetchJSON(endpoint, params = {}) {
     return res.json();
 }
 
+export async function putJSON(endpoint, body) {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+}
+
 export const api = {
     meta: () => fetchJSON('/meta'),
     summary: (f) => fetchJSON('/summary', f),
@@ -22,4 +34,5 @@ export const api = {
     topCategories: (f, level = 'l1', limit = 20) => fetchJSON('/top-categories', { ...f, level, limit }),
     cashflowSummary: (f) => fetchJSON('/cashflow-summary', f),
     transactions: (params) => fetchJSON('/transactions', params),
+    updateTransaction: (txId, l1, l2) => putJSON(`/transactions/${encodeURIComponent(txId)}`, { category_l1: l1, category_l2: l2 })
 };

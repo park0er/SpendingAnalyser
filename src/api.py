@@ -323,6 +323,7 @@ def transactions():
     records = []
     for _, row in page_data.iterrows():
         records.append({
+            "id": row["transaction_id"],
             "timestamp": str(row["timestamp"]),
             "platform": row["source_platform"],
             "user_id": row["user_id"],
@@ -345,6 +346,33 @@ def transactions():
         "per_page": per_page,
         "records": records,
     })
+
+
+@app.route("/api/transactions/<path:tx_id>", methods=["PUT"])
+def update_transaction(tx_id):
+    """Update a transaction's L1 and L2 categories."""
+    df = _get_df()
+    data = request.json
+    
+    if "category_l1" not in data or "category_l2" not in data:
+        return jsonify({"error": "Missing category data"}), 400
+        
+    l1 = data["category_l1"]
+    l2 = data["category_l2"]
+    
+    # Find the record by transaction_id
+    mask = df["transaction_id"] == tx_id
+    if not mask.any():
+        return jsonify({"error": "Transaction not found"}), 404
+        
+    df.loc[mask, "global_category_l1"] = l1
+    df.loc[mask, "global_category_l2"] = l2
+    
+    # Save back to CSV
+    csv_path = Path(OUTPUT_DIR) / "processed_data.csv"
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    
+    return jsonify({"success": True})
 
 
 def start_server(host="0.0.0.0", port=5001, debug=True):

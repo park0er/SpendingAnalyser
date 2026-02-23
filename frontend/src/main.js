@@ -16,6 +16,9 @@ function fmt(n) {
 let taxonomyData = [];
 let excludedCategories = [];
 
+// Track if pie chart is drilling down into an L1 category
+let pieDrillDownL1 = null;
+
 function getFilters() {
     const f = {};
     const user = document.getElementById('f-user').value;
@@ -31,7 +34,11 @@ function getFilters() {
     if (year) f.year = year;
     if (platform) f.platform = platform;
     if (track) f.track = track;
+
+    // Drill-down overrides L1 if not explicitly set
     if (category) f.category = category;
+    else if (pieDrillDownL1) f.category = pieDrillDownL1;
+
     if (categoryL2) f.category_l2 = categoryL2;
     if (dateFrom) f.date_from = dateFrom;
     if (dateTo) f.date_to = dateTo;
@@ -66,6 +73,7 @@ async function loadMeta() {
     taxonomyData = data.taxonomy;
     const catSel = document.getElementById('f-category');
     const excludeSel = document.getElementById('f-exclude-add');
+
     data.taxonomy.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t.l1;
@@ -76,10 +84,18 @@ async function loadMeta() {
         opt2.value = t.l1;
         opt2.textContent = t.l1;
         excludeSel.appendChild(opt2);
+
+        // Also allow excluding specific L2s
+        t.l2s.forEach(l2 => {
+            const opt3 = document.createElement('option');
+            opt3.value = l2;
+            opt3.textContent = `  ↳ ${l2}`;
+            excludeSel.appendChild(opt3);
+        });
     });
 
-    // L2 depends on L1 selection
     document.getElementById('f-category').addEventListener('change', updateL2Options);
+    updateL2Options(); // Populate L2 initially
 }
 
 function updateL2Options() {
@@ -97,6 +113,19 @@ function updateL2Options() {
                 l2Sel.appendChild(opt);
             });
         }
+    } else {
+        // If no L1 is selected, group all L2s by L1
+        taxonomyData.forEach(t => {
+            const group = document.createElement('optgroup');
+            group.label = t.l1;
+            t.l2s.forEach(l2 => {
+                const opt = document.createElement('option');
+                opt.value = l2;
+                opt.textContent = l2;
+                group.appendChild(opt);
+            });
+            l2Sel.appendChild(group);
+        });
     }
 }
 
@@ -132,13 +161,34 @@ async function loadSummary() {
 let pieChart = null;
 
 async function loadCategoryPie() {
-    const data = await api.byCategory(getFilters(), 'l1');
-    const labels = data.map(d => d.global_category_l1 || '未分类');
+    const filters = getFilters();
+
+    // If we are drilling down or filtering by L1, show L2 distribution
+    const level = (filters.category || pieDrillDownL1) ? 'l2' : 'l1';
+    const data = await api.byCategory(filters, level);
+
+    const labels = data.map(d => level === 'l1' ? (d.global_category_l1 || '未分类') : (d.global_category_l2 || '未分类'));
     const values = data.map(d => d.total);
 
     if (pieChart) pieChart.destroy();
 
-    pieChart = new Chart(document.getElementById('category-pie'), {
+    const canvas = document.getElementById('category-pie');
+
+    // Update header to indicate drill-down
+    const header = canvas.parentElement.querySelector('h2');
+    if (pieDrillDownL1 && !document.getElementById('f-category').value) {
+        header.innerHTML = `分类支出 <span style="font-size:12px;color:#5b8def;cursor:pointer" id="reset-drill">(退出: ${pieDrillDownL1}) ✕</span>`;
+        document.getElementById('reset-drill').addEventListener('click', () => {
+            pieDrillDownL1 = null;
+            refreshAll();
+        });
+    } else if (level === 'l2') {
+        header.innerHTML = `二级分类分布`;
+    } else {
+        header.innerHTML = `一级分类分布 <span style="font-size:11px;color:#6b7394">(点击钻取)</span>`;
+    }
+
+    pieChart = new Chart(canvas, {
         type: 'doughnut',
         data: {
             labels,
@@ -152,6 +202,13 @@ async function loadCategoryPie() {
         options: {
             responsive: true,
             maintainAspectRatio: true,
+            onClick: (e, items) => {
+                if (items.length > 0 && level === 'l1') {
+                    const idx = items[0].index;
+                    pieDrillDownL1 = labels[idx];
+                    refreshAll();
+                }
+            },
             plugins: {
                 legend: {
                     position: 'right',
@@ -205,15 +262,9 @@ async function loadTrend(granularity = 'month') {
             responsive: true,
             maintainAspectRatio: true,
             scales: {
-                x: {
-                    ticks: { color: '#6b7394', font: { size: 11 } },
-                    grid: { display: false },
-                },
+                x: { ticks: { color: '#6b7394', font: { size: 11 } }, grid: { display: false } },
                 y: {
-                    ticks: {
-                        color: '#6b7394',
-                        callback: v => '¥' + (v >= 10000 ? (v / 10000).toFixed(1) + 'W' : v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v),
-                    },
+                    ticks: { color: '#6b7394', callback: v => '¥' + (v >= 10000 ? (v / 10000).toFixed(1) + 'W' : v) },
                     grid: { color: '#2a2f4522' },
                 },
             },
@@ -227,7 +278,8 @@ async function loadTrend(granularity = 'month') {
 
 // ── Top Categories Ranking ───────────────────────────────────
 async function loadTopCategories() {
-    const data = await api.topCategories(getFilters(), 'l1', 20);
+    const level = (getFilters().category || pieDrillDownL1) ? 'l2' : 'l1';
+    const data = await api.topCategories(getFilters(), level, 20);
     const container = document.getElementById('top-categories-list');
     container.innerHTML = '';
 
@@ -240,12 +292,13 @@ async function loadTopCategories() {
 
     data.forEach((item, i) => {
         const barWidth = Math.max(5, (item.total / maxTotal) * 100);
+        const name = level === 'l1' ? item.category : item.category_l2;
         const div = document.createElement('div');
         div.className = 'ranking-item';
         div.innerHTML = `
       <span class="rank-num ${i < 3 ? 'top3' : ''}">${i + 1}</span>
       <div class="rank-info">
-        <div class="rank-name">${item.category || '未分类'}</div>
+        <div class="rank-name">${name || '未分类'}</div>
         <div class="rank-sub">${item.count} 笔 · 均 ${fmt(item.avg)}</div>
         <div class="rank-bar" style="width:${barWidth}%"></div>
       </div>
@@ -286,24 +339,14 @@ async function loadMerchants() {
             maintainAspectRatio: false,
             scales: {
                 x: {
-                    ticks: {
-                        color: '#6b7394',
-                        callback: v => '¥' + (v >= 10000 ? (v / 10000).toFixed(1) + 'W' : v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v),
-                    },
+                    ticks: { color: '#6b7394', callback: v => '¥' + (v >= 10000 ? (v / 10000).toFixed(1) + 'W' : v) },
                     grid: { color: '#2a2f4522' },
                 },
-                y: {
-                    ticks: { color: '#9ca3b8', font: { size: 11 } },
-                    grid: { display: false },
-                },
+                y: { ticks: { color: '#9ca3b8', font: { size: 11 } }, grid: { display: false } },
             },
             plugins: {
                 legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: ctx => `${fmt(ctx.parsed.x)} (${data[ctx.dataIndex].count}笔)`,
-                    },
-                },
+                tooltip: { callbacks: { label: ctx => `${fmt(ctx.parsed.x)} (${data[ctx.dataIndex].count}笔)` } },
             },
         },
     });
@@ -332,6 +375,59 @@ async function loadCashflow() {
     container.innerHTML = html;
 }
 
+// ── Transaction Table Inline Editing ─────────────────────────
+function createL1L2Selects(tx) {
+    const l1Sel = document.createElement('select');
+    l1Sel.className = 'edit-select';
+
+    const l2Sel = document.createElement('select');
+    l2Sel.className = 'edit-select';
+
+    // Populate L1
+    taxonomyData.forEach(t => {
+        const opt = new Option(t.l1, t.l1);
+        opt.selected = t.l1 === tx.category_l1;
+        l1Sel.add(opt);
+    });
+
+    // Function to populate L2 based on L1
+    const updateL2 = () => {
+        const l1 = l1Sel.value;
+        l2Sel.innerHTML = '';
+        const entry = taxonomyData.find(t => t.l1 === l1);
+        if (entry) {
+            entry.l2s.forEach(l2 => {
+                const opt = new Option(l2, l2);
+                opt.selected = l2 === tx.category_l2;
+                l2Sel.add(opt);
+            });
+        }
+    };
+
+    l1Sel.addEventListener('change', updateL2);
+    updateL2(); // initial populate
+
+    return { l1Sel, l2Sel };
+}
+
+async function saveTransactionEdit(tx, l1, l2, tr) {
+    try {
+        const btn = tr.querySelector('.btn-save');
+        if (btn) btn.disabled = true;
+
+        await api.updateTransaction(tx.id, l1, l2);
+
+        // Refresh table to reflect changes cleanly without full reload
+        loadTransactions();
+        // And refresh summary pie if necessary
+        loadCategoryPie();
+        loadTopCategories();
+    } catch (err) {
+        alert("保存失败: " + err.message);
+        loadTransactions(); // Revert
+    }
+}
+
 // ── Transaction Table ────────────────────────────────────────
 let currentPage = 1;
 const perPage = 50;
@@ -351,11 +447,13 @@ async function loadTransactions() {
     tbody.innerHTML = '';
 
     if (!data.records.length) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#6b7394;padding:20px">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#6b7394;padding:20px">暂无数据</td></tr>';
     }
 
     for (const tx of data.records) {
         const tr = document.createElement('tr');
+        tr.dataset.id = tx.id;
+
         const platformBadge = tx.platform === 'alipay'
             ? '<span class="platform-badge platform-alipay">支付宝</span>'
             : '<span class="platform-badge platform-wechat">微信</span>';
@@ -376,11 +474,39 @@ async function loadTransactions() {
       <td title="${tx.description}">${tx.description}</td>
       <td class="${amountClass}">¥${tx.amount.toFixed(2)}</td>
       <td class="amount">¥${tx.effective_amount.toFixed(2)}</td>
-      <td>${l1}</td>
-      <td>${l2}</td>
+      <td class="l1-cell">${l1}</td>
+      <td class="l2-cell">${l2}</td>
       <td>${tx.payment_method || ''}</td>
       <td>${trackTag}</td>
+      <td class="td-actions"><button class="btn-mini btn-edit">编辑</button></td>
     `;
+
+        // Setup Edit Button
+        const btnEdit = tr.querySelector('.btn-edit');
+        btnEdit.addEventListener('click', () => {
+            const { l1Sel, l2Sel } = createL1L2Selects(tx);
+
+            tr.querySelector('.l1-cell').innerHTML = '';
+            tr.querySelector('.l1-cell').appendChild(l1Sel);
+
+            tr.querySelector('.l2-cell').innerHTML = '';
+            tr.querySelector('.l2-cell').appendChild(l2Sel);
+
+            const actions = tr.querySelector('.td-actions');
+            actions.innerHTML = `
+        <button class="btn-mini save btn-save">保存</button>
+        <button class="btn-mini cancel">取消</button>
+      `;
+
+            actions.querySelector('.btn-save').addEventListener('click', () => {
+                saveTransactionEdit(tx, l1Sel.value, l2Sel.value, tr);
+            });
+
+            actions.querySelector('.cancel').addEventListener('click', () => {
+                loadTransactions(); // Just reload to cancel
+            });
+        });
+
         tbody.appendChild(tr);
     }
 
@@ -427,10 +553,11 @@ async function refreshAll() {
 
 // ── Event Listeners ──────────────────────────────────────────
 function setupListeners() {
-    // Apply filters button
-    document.getElementById('btn-apply').addEventListener('click', refreshAll);
+    document.getElementById('btn-apply').addEventListener('click', () => {
+        pieDrillDownL1 = null; // reset drill-down on new explicit filter
+        refreshAll();
+    });
 
-    // Reset filters button
     document.getElementById('btn-reset').addEventListener('click', () => {
         document.getElementById('f-user').value = '';
         document.getElementById('f-year').value = '';
@@ -442,18 +569,17 @@ function setupListeners() {
         document.getElementById('f-date-to').value = '';
         document.getElementById('search-input').value = '';
         excludedCategories = [];
+        pieDrillDownL1 = null;
         renderExcludeTags();
         updateL2Options();
         refreshAll();
     });
 
-    // Search button
     document.getElementById('btn-search').addEventListener('click', () => {
         currentPage = 1;
         loadTransactions();
     });
 
-    // Enter key in search box
     document.getElementById('search-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             currentPage = 1;
@@ -461,7 +587,6 @@ function setupListeners() {
         }
     });
 
-    // Period toggle
     document.querySelectorAll('.btn-period').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.btn-period').forEach(b => b.classList.remove('active'));
@@ -470,7 +595,6 @@ function setupListeners() {
         });
     });
 
-    // Exclude category add
     document.getElementById('f-exclude-add').addEventListener('change', (e) => {
         const val = e.target.value;
         if (val && !excludedCategories.includes(val)) {
@@ -491,5 +615,5 @@ async function init() {
 init().catch(err => {
     console.error('Dashboard init error:', err);
     document.getElementById('tx-body').innerHTML =
-        `<tr><td colspan="10" style="color:#f87171;padding:20px">加载失败: ${err.message}</td></tr>`;
+        `<tr><td colspan="11" style="color:#f87171;padding:20px">加载失败: ${err.message}</td></tr>`;
 });
