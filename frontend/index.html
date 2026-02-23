@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>支出分析仪表盘 · SpendingAnalyser</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1>💰 支出分析仪表盘</h1>
+        <p class="subtitle">跨平台财务分析 · 支付宝 + 微信支付</p>
+      </div>
+    </header>
+
+    <!-- Global Filter Bar -->
+    <section class="filter-bar" id="filter-bar">
+      <div class="filter-group">
+        <label>👤 用户</label>
+        <select id="f-user">
+          <option value="">全部用户</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>📅 年份</label>
+        <select id="f-year">
+          <option value="">全部年份</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>📱 平台</label>
+        <select id="f-platform">
+          <option value="">全部平台</option>
+          <option value="alipay">支付宝</option>
+          <option value="wechat">微信</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>🔀 轨道</label>
+        <select id="f-track">
+          <option value="consumption">消费</option>
+          <option value="cashflow">资金流动</option>
+          <option value="">全部</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>🏷️ 一级分类</label>
+        <select id="f-category">
+          <option value="">全部分类</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>📋 二级分类</label>
+        <select id="f-category-l2">
+          <option value="">全部二级</option>
+        </select>
+      </div>
+      <div class="filter-group filter-date">
+        <label>📆 日期范围</label>
+        <div class="date-inputs">
+          <input type="date" id="f-date-from" />
+          <span>至</span>
+          <input type="date" id="f-date-to" />
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>🚫 排除分类</label>
+        <div class="exclude-tags" id="exclude-tags"></div>
+        <select id="f-exclude-add">
+          <option value="">点击添加排除...</option>
+        </select>
+      </div>
+      <div class="filter-actions">
+        <button class="btn-apply" id="btn-apply">🔍 应用筛选</button>
+        <button class="btn-reset" id="btn-reset">↺ 重置</button>
+      </div>
+    </section>
+
+    <!-- Summary Cards -->
+    <section class="cards-grid" id="summary-cards">
+      <div class="card card-spend">
+        <div class="card-label">净消费支出</div>
+        <div class="card-value" id="total-spend">--</div>
+      </div>
+      <div class="card card-refund">
+        <div class="card-label">退款金额</div>
+        <div class="card-value" id="total-refund">--</div>
+      </div>
+      <div class="card card-cashflow">
+        <div class="card-label">非消费转移</div>
+        <div class="card-value" id="total-cashflow">--</div>
+      </div>
+      <div class="card card-records">
+        <div class="card-label">记录总数</div>
+        <div class="card-value" id="total-records">--</div>
+      </div>
+    </section>
+
+    <!-- Charts Row -->
+    <section class="charts-row">
+      <div class="chart-container">
+        <h2>分类支出分布</h2>
+        <canvas id="category-pie"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2>
+          消费趋势
+          <div class="period-toggle">
+            <button class="btn-period" data-period="year">年</button>
+            <button class="btn-period active" data-period="month">月</button>
+            <button class="btn-period" data-period="week">周</button>
+          </div>
+        </h2>
+        <canvas id="trend-line"></canvas>
+      </div>
+    </section>
+
+    <!-- Rankings Row -->
+    <section class="charts-row">
+      <div class="chart-container">
+        <h2>🏆 Top 分类排行</h2>
+        <div id="top-categories-list" class="ranking-list"></div>
+      </div>
+      <div class="chart-container">
+        <h2>🏪 Top 15 商户</h2>
+        <canvas id="merchant-bar"></canvas>
+      </div>
+    </section>
+
+    <!-- Cashflow Panel -->
+    <section class="chart-container full-width cashflow-panel">
+      <h2>💸 资金流动轨（非消费项）</h2>
+      <div id="cashflow-content"></div>
+    </section>
+
+    <!-- Transaction Table -->
+    <section class="table-section">
+      <h2>交易明细</h2>
+      <div class="table-controls">
+        <input type="text" id="search-input" placeholder="搜索商户或商品..." />
+        <button class="btn-search" id="btn-search">🔍 搜索</button>
+      </div>
+      <div class="table-wrapper">
+        <table id="tx-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>平台</th>
+              <th>交易对方</th>
+              <th>商品描述</th>
+              <th>金额</th>
+              <th>实际支出</th>
+              <th>L1 分类</th>
+              <th>L2 分类</th>
+              <th>支付方式</th>
+              <th>轨道</th>
+            </tr>
+          </thead>
+          <tbody id="tx-body"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="pagination"></div>
+    </section>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>
