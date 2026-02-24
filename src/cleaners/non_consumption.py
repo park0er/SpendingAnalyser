@@ -107,6 +107,54 @@ def _classify_wechat_track(row: pd.Series) -> str:
     return "cashflow"
 
 
+def _classify_jd_track(row: pd.Series) -> str:
+    """Determine track for a JD record."""
+    # Already processed refunds
+    if row["track"] == "refund_processed":
+        return "refund_processed"
+
+    # Standalone refund rows
+    if row["status"] == "退款成功":
+        return "refund_processed"
+
+    # 不计收支 → cashflow (白条还款, 小金库, 预授权 etc.)
+    if row["direction"] == "不计收支":
+        return "cashflow"
+
+    # 收入 → cashflow (小金库红包 etc.)
+    if row["direction"] == "收入":
+        return "cashflow"
+
+    # 支出 → consumption
+    if row["direction"] == "支出":
+        return "consumption"
+
+    return "cashflow"
+
+
+def _classify_meituan_track(row: pd.Series) -> str:
+    """Determine track for a Meituan record."""
+    # Already processed refunds
+    if row["track"] == "refund_processed":
+        return "refund_processed"
+
+    tx_type = str(row["platform_tx_type"])
+
+    # 退款 → refund_processed
+    if tx_type == "退款":
+        return "refund_processed"
+
+    # 还款 (美团月付代扣还款) → cashflow
+    if tx_type == "还款":
+        return "cashflow"
+
+    # 支付 + 支出 → consumption
+    if tx_type == "支付" and row["direction"] == "支出":
+        return "consumption"
+
+    return "cashflow"
+
+
 def apply_track_classification(df: pd.DataFrame) -> pd.DataFrame:
     """
     Classify each record into consumption or cashflow track.
@@ -124,5 +172,9 @@ def apply_track_classification(df: pd.DataFrame) -> pd.DataFrame:
             df.at[idx, "track"] = _classify_alipay_track(row)
         elif row["source_platform"] == "wechat":
             df.at[idx, "track"] = _classify_wechat_track(row)
+        elif row["source_platform"] == "jd":
+            df.at[idx, "track"] = _classify_jd_track(row)
+        elif row["source_platform"] == "meituan":
+            df.at[idx, "track"] = _classify_meituan_track(row)
 
     return df

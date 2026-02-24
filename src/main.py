@@ -1,6 +1,6 @@
 """
 Main entry point — orchestrates the full pipeline:
-  Parse → Refund Netting → Track Classification → Taxonomy Mapping → (LLM Tagging) → API/Report
+  Parse → Refund Netting → Track Classification → Tag Inheritance → (LLM Tagging) → API/Report
 """
 
 import os
@@ -10,10 +10,15 @@ from pathlib import Path
 
 from .parsers.alipay import parse_alipay
 from .parsers.wechat import parse_wechat
+from .parsers.jd import parse_jd
+from .parsers.meituan import parse_meituan
 from .cleaners.refund_netting import apply_refund_netting
 from .cleaners.non_consumption import apply_track_classification
-from .classifiers.taxonomy import apply_alipay_l1_mapping
-from .classifiers.llm_tagger import generate_tagging_batches
+from .classifiers.llm_tagger import (
+    generate_tagging_batches,
+    apply_tag_inheritance,
+    export_tag_overrides,
+)
 
 
 def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
@@ -51,6 +56,20 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
         print(f"    {len(df)} records parsed")
         dfs.append(df)
 
+    # JD CSV files
+    for f in sorted(data_path.glob("京东交易流水*.csv")):
+        print(f"  → JD: {f.name}")
+        df = parse_jd(str(f))
+        print(f"    {len(df)} records parsed")
+        dfs.append(df)
+
+    # Meituan CSV files
+    for f in sorted(data_path.glob("美团账单*.csv")):
+        print(f"  → Meituan: {f.name}")
+        df = parse_meituan(str(f))
+        print(f"    {len(df)} records parsed")
+        dfs.append(df)
+
     if not dfs:
         print("❌ No data files found in", data_dir)
         return pd.DataFrame()
@@ -74,12 +93,14 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
     cashflow = all_data[all_data["track"] == "cashflow"].shape[0]
     print(f"  ✅ Consumption: {consumption} | Cashflow: {cashflow}")
 
-    # ── Step 4: Taxonomy Mapping ─────────────────────────────────
-    print("\n🏷️  Step 4: Taxonomy mapping (L1)...")
-    all_data = apply_alipay_l1_mapping(all_data)
+    # ── Step 4: Tag Inheritance ───────────────────────────────────
+    overrides_file = str(output_path / "tag_overrides.csv")
+    print(f"\n🏷️  Step 4: Tag inheritance...")
+    all_data = apply_tag_inheritance(all_data, overrides_file)
 
-    with_l1 = all_data[all_data["global_category_l1"] != ""].shape[0]
-    print(f"  ✅ {with_l1} records have L1 category")
+    with_l1 = all_data[all_data["global_category_l1"].fillna("") != ""].shape[0]
+    with_l2 = all_data[all_data["global_category_l2"].fillna("") != ""].shape[0]
+    print(f"  ✅ {with_l1} records have L1, {with_l2} have L2 (inherited)")
 
     # ── Step 5: Generate LLM Tagging Batches ─────────────────────
     tagging_dir = str(output_path / "tagging_batches")
@@ -92,6 +113,10 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
     data_file = output_path / "processed_data.csv"
     all_data.to_csv(str(data_file), index=False, encoding="utf-8-sig")
     print(f"\n💾 Processed data saved to {data_file}")
+
+    # Update tag_overrides with any newly tagged records for future reruns
+    count = export_tag_overrides(all_data, overrides_file)
+    print(f"  Tag overrides updated: {count} records saved to {overrides_file}")
 
     # ── Summary ──────────────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -109,16 +134,18 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
 
     # By L1 category
     if not consumption_df["global_category_l1"].empty:
-        print(f"\n   By L1 Category:")
-        l1_summary = (
-            consumption_df.groupby("global_category_l1")["effective_amount"]
-            .agg(["sum", "count"])
-            .sort_values("sum", ascending=False)
-        )
-        for cat, row in l1_summary.iterrows():
-            if cat:
-                pct = row["sum"] / total_spend * 100 if total_spend > 0 else 0
-                print(f"     {cat:12s}  ¥{row['sum']:>10,.2f}  ({row['count']:>3.0f}笔, {pct:>5.1f}%)")
+        l1_filled = consumption_df[consumption_df["global_category_l1"].fillna("") != ""]
+        if not l1_filled.empty:
+            print(f"\n   By L1 Category:")
+            l1_summary = (
+                l1_filled.groupby("global_category_l1")["effective_amount"]
+                .agg(["sum", "count"])
+                .sort_values("sum", ascending=False)
+            )
+            for cat, row in l1_summary.iterrows():
+                if cat:
+                    pct = row["sum"] / total_spend * 100 if total_spend > 0 else 0
+                    print(f"     {cat:12s}  ¥{row['sum']:>10,.2f}  ({row['count']:>3.0f}笔, {pct:>5.1f}%)")
 
     # Cashflow track stats
     cashflow_df = all_data[all_data["track"] == "cashflow"]
