@@ -754,9 +754,87 @@ async function loadTransactions() {
     }
 }
 
+// ── Drill-Down Status Bar ────────────────────────────────────
+function renderDrillBar() {
+    const bar = document.getElementById('drill-bar');
+    const chips = document.getElementById('drill-chips');
+    chips.innerHTML = '';
+
+    const activeDrills = [];
+
+    // Date range drill (from trend chart click)
+    const dateFrom = document.getElementById('f-date-from').value;
+    const dateTo = document.getElementById('f-date-to').value;
+    if (dateFrom || dateTo) {
+        const label = dateFrom && dateTo
+            ? `📅 ${dateFrom} ~ ${dateTo}`
+            : dateFrom ? `📅 ${dateFrom} 起` : `📅 至 ${dateTo}`;
+        activeDrills.push({
+            label,
+            clear: () => {
+                document.getElementById('f-date-from').value = '';
+                document.getElementById('f-date-to').value = '';
+                refreshAll();
+            },
+        });
+    }
+
+    // L1 category drill
+    if (pieDrillDownL1) {
+        activeDrills.push({
+            label: `🏷️ ${pieDrillDownL1}`,
+            clear: () => {
+                pieDrillDownL1 = null;
+                pieDrillDownL2 = null;
+                refreshAll();
+            },
+        });
+    }
+
+    // L2 category drill
+    if (pieDrillDownL2) {
+        activeDrills.push({
+            label: `📋 ${pieDrillDownL2}`,
+            clear: () => {
+                pieDrillDownL2 = null;
+                refreshAll();
+            },
+        });
+    }
+
+    // Search drill (from merchant click)
+    const search = document.getElementById('search-input').value;
+    if (search) {
+        activeDrills.push({
+            label: `🔎 "${search.length > 12 ? search.slice(0, 12) + '…' : search}"`,
+            clear: () => {
+                document.getElementById('search-input').value = '';
+                currentPage = 1;
+                loadTransactions();
+                renderDrillBar();
+            },
+        });
+    }
+
+    if (activeDrills.length === 0) {
+        bar.style.display = 'none';
+        return;
+    }
+
+    bar.style.display = 'flex';
+    activeDrills.forEach(d => {
+        const chip = document.createElement('span');
+        chip.className = 'drill-chip';
+        chip.innerHTML = `${d.label} <span class="drill-chip-x">✕</span>`;
+        chip.querySelector('.drill-chip-x').addEventListener('click', d.clear);
+        chips.appendChild(chip);
+    });
+}
+
 // ── Refresh All ──────────────────────────────────────────────
 async function refreshAll() {
     currentPage = 1;
+    renderDrillBar();
     await Promise.all([
         loadSummary(),
         loadCategoryPie(),
@@ -771,6 +849,15 @@ async function refreshAll() {
 // ── Event Listeners ──────────────────────────────────────────
 function setupListeners() {
     document.getElementById('btn-apply').addEventListener('click', () => {
+        pieDrillDownL1 = null;
+        pieDrillDownL2 = null;
+        refreshAll();
+    });
+
+    document.getElementById('drill-clear-all').addEventListener('click', () => {
+        document.getElementById('f-date-from').value = '';
+        document.getElementById('f-date-to').value = '';
+        document.getElementById('search-input').value = '';
         pieDrillDownL1 = null;
         pieDrillDownL2 = null;
         refreshAll();

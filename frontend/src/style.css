@@ -587,6 +587,86 @@ td.refunded {
   font-size: 12px;
 }
 
+/* ── Drill-Down Status Bar ────────────────────────────────── */
+.drill-bar {
+  background: linear-gradient(135deg, #1e223588, #252a4088);
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  animation: drillBarIn 0.2s ease-out;
+}
+
+@keyframes drillBarIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.drill-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.drill-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.drill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--accent-blue);
+  color: white;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.drill-chip-x {
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.drill-chip-x:hover {
+  opacity: 1;
+}
+
+.drill-clear {
+  background: transparent;
+  border: 1px solid var(--accent-red);
+  color: var(--accent-red);
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.drill-clear:hover {
+  background: var(--accent-red);
+  color: white;
+}
+
 /* ── Multi-Select Dropdown ────────────────────────────────── */
 .multi-select {
   position: relative;
