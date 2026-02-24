@@ -89,74 +89,114 @@ def _net_jd_refunds(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _extract_merchant_keyword(title: str) -> str:
+def _extract_merchant_keywords(title: str) -> list[str]:
     """
-    Extract a merchant keyword from Meituan order title for fuzzy matching.
+    Extract merchant keywords from Meituan order title for fuzzy matching.
+    Returns a list of candidate keywords (longest first) for flexible matching.
 
     Examples:
-        "小象超市-订单编号1364001542164368" -> "小象超市"
-        "阿招鸡煲代金券" -> "阿招鸡煲"
-        "LUSH单人餐" -> "LUSH"
-        "许家菜4人餐" -> "许家菜"
+        "小象超市-订单编号1364001542164368" -> ["小象超市"]
+        "阿招鸡煲代金券" -> ["阿招鸡煲"]
+        "LUSH单人餐" -> ["LUSH"]
+        "Tims天好咖啡·贝果·暖食(西三旗万象汇店) 订单详情" -> ["Tims天好咖啡", "Tims"]
+        "COSTA咖啡(回龙观华联1店) 订单详情" -> ["COSTA咖啡", "COSTA"]
+        "喜茶（北京辉煌国际店） 订单详情" -> ["喜茶"]
+        "喜茶（北京辉煌国际店）-301721361180131048" -> ["喜茶"]
+        "宅舍 HOUSE 推拿院" -> ["宅舍 HOUSE 推拿院", "宅舍"]
+        "美团商家代金券-289529094000906348" -> ["美团商家代金券-289529094000906348"]  (exact match by full title)
     """
     title = str(title).strip()
-    # Remove common suffixes: 代金券, X人餐, 单人餐, 招牌X, 订单详情, etc.
-    title = re.sub(r"(代金券|\d+人餐|单人餐|双人餐|订单详情|订单编号\S+)", "", title)
-    # Remove "美团商家代金券-数字" pattern
-    title = re.sub(r"美团商家代金券-\d+", "", title)
-    # Remove "小象超市-订单编号XXX" -> keep "小象超市"
-    title = re.sub(r"-订单编号\S+", "", title)
-    # Take the first meaningful segment (split by common delimiters)
+
+    keywords = []
+
+    # Always include the full raw title first for exact-match scenarios
+    # (e.g. 美团商家代金券-289529094000906348 purchase ↔ refund)
+    keywords.append(title)
+
+    # Remove common suffixes
+    cleaned = re.sub(r"(代金券|招牌[^\s]*|订单详情|订单编号\S+)", "", title)
+    # Remove trailing number IDs like "-301721361180131048"
+    cleaned = re.sub(r"-\d{10,}$", "", cleaned)
+    # Remove meal suffixes
+    cleaned = re.sub(r"\d+人餐|单人餐|双人餐", "", cleaned)
+    # Remove "-订单编号XXX"
+    cleaned = re.sub(r"-订单编号\S+", "", cleaned)
+
+    # Add cleaned version if different from raw
+    full = cleaned.strip()
+    if full and full != title:
+        keywords.append(full)
+
+    # Split by common delimiters and take first segment
     for sep in ["(", "（", "-", "·", " "]:
-        if sep in title:
-            title = title.split(sep)[0]
-    return title.strip()
+        if sep in cleaned:
+            first = cleaned.split(sep)[0].strip()
+            if first and first not in keywords:
+                keywords.append(first)
+            break  # Only split by the first found delimiter
+
+    # Extract pure brand names (Latin/CJK prefix before mixing)
+    brand = re.match(r"^([A-Za-z]+)", cleaned)
+    if brand:
+        b = brand.group(1)
+        if b not in keywords and len(b) >= 2:
+            keywords.append(b)
+
+    return keywords
 
 
 def _net_meituan_refunds(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Meituan refund netting via adjacent-row reverse matching.
+    Meituan refund netting via global index matching.
 
-    For each refund row (交易类型=退款), searches backward within 10 rows
-    to find a matching payment row with similar merchant name and
-    sufficient amount. On match, deducts from the original's effective_amount.
+    Builds a global index of all Meituan payment rows keyed by merchant
+    keywords. For each refund row, looks up candidates by keyword and
+    picks the best match (closest in time, amount ≥ refund).
     """
     meituan_mask = df["source_platform"] == "meituan"
-    meituan_indices = df[meituan_mask].index.tolist()
+    meituan_df = df[meituan_mask]
 
-    for pos, idx in enumerate(meituan_indices):
-        row = df.loc[idx]
+    # Build global index: keyword -> list of (idx, amount, timestamp)
+    from collections import defaultdict
+    payment_index = defaultdict(list)
+
+    for idx, row in meituan_df.iterrows():
+        if row["platform_tx_type"] != "支付":
+            continue
+        keywords = _extract_merchant_keywords(row["counterparty"])
+        for kw in keywords:
+            payment_index[kw].append(idx)
+
+    # Process refund rows
+    for idx, row in meituan_df.iterrows():
         if row["platform_tx_type"] != "退款":
             continue
 
         refund_amount = row["amount"]
-        refund_keyword = _extract_merchant_keyword(row["counterparty"])
+        refund_keywords = _extract_merchant_keywords(row["counterparty"])
 
         # Mark refund row as ignored
         df.at[idx, "is_ignored"] = True
         df.at[idx, "track"] = "refund_processed"
 
-        if not refund_keyword:
+        if not refund_keywords:
+            # Coupon refunds — no matching payment expected
+            df.at[idx, "effective_amount"] = -refund_amount
             continue
 
-        # Search backward in the meituan sub-list (up to 10 rows)
+        # Search for matching payment across all keywords
         matched = False
-        search_start = max(0, pos - 10)
-        for search_pos in range(pos - 1, search_start - 1, -1):
-            candidate_idx = meituan_indices[search_pos]
-            candidate = df.loc[candidate_idx]
-
-            if candidate["platform_tx_type"] != "支付":
+        for kw in refund_keywords:
+            if kw not in payment_index:
                 continue
-            if candidate["is_refunded"]:
-                continue  # Already matched to another refund
 
-            candidate_keyword = _extract_merchant_keyword(candidate["counterparty"])
+            candidates = payment_index[kw]
+            for candidate_idx in candidates:
+                candidate = df.loc[candidate_idx]
 
-            # Fuzzy match: either keyword contains the other, or they share
-            # a significant common substring
-            if (refund_keyword in candidate_keyword or
-                    candidate_keyword in refund_keyword):
+                if candidate["is_refunded"]:
+                    continue  # Already matched
+
                 if refund_amount <= candidate["amount"]:
                     # Match found — deduct from original
                     df.at[candidate_idx, "is_refunded"] = True
@@ -167,6 +207,9 @@ def _net_meituan_refunds(df: pd.DataFrame) -> pd.DataFrame:
                     )
                     matched = True
                     break
+
+            if matched:
+                break
 
         if not matched:
             # Unmatched refund — keep as negative effective_amount for natural offset

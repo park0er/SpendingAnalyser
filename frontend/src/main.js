@@ -482,9 +482,13 @@ async function loadTransactions() {
         const tr = document.createElement('tr');
         tr.dataset.id = tx.id;
 
-        const platformBadge = tx.platform === 'alipay'
-            ? '<span class="platform-badge platform-alipay">支付宝</span>'
-            : '<span class="platform-badge platform-wechat">微信</span>';
+        const platformMap = {
+            alipay: '<span class="platform-badge platform-alipay">支付宝</span>',
+            wechat: '<span class="platform-badge platform-wechat">微信</span>',
+            jd: '<span class="platform-badge platform-jd">京东</span>',
+            meituan: '<span class="platform-badge platform-meituan">美团</span>',
+        };
+        const platformBadge = platformMap[tx.platform] || `<span class="platform-badge">${tx.platform}</span>`;
 
         const amountClass = tx.is_refunded ? 'amount refunded' : 'amount';
         const l1 = tx.category_l1 ? `<span class="category-tag">${tx.category_l1}</span>` : '-';

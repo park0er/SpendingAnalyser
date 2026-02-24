@@ -513,6 +513,16 @@ td.refunded {
   color: #4ade80;
 }
 
+.platform-jd {
+  background: #e4393c22;
+  color: #f87171;
+}
+
+.platform-meituan {
+  background: #ffc30022;
+  color: #fbbf24;
+}
+
 .category-tag {
   font-size: 11px;
   color: var(--accent-purple);

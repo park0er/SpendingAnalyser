@@ -54,7 +54,7 @@ def export_tag_overrides(df: pd.DataFrame, output_path: str) -> int:
     mask = (
         (df["track"] == "consumption")
         & (df["global_category_l2"].fillna("") != "")
-        & (~df["is_ignored"])
+        & (df["is_ignored"].astype(str) != "True")
     )
     overrides = df[mask][
         ["transaction_id", "source_platform", "global_category_l1", "global_category_l2"]
