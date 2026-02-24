@@ -20,28 +20,35 @@ let excludedCategories = [];
 let pieDrillDownL1 = null;
 let pieDrillDownL2 = null;
 
+// Multi-select state
+let selectedPlatforms = [];
+let selectedL1s = [];
+let selectedL2s = [];
+
+// Sort state
+let currentSort = { column: 'timestamp', order: 'desc' };
+
 function getFilters() {
     const f = {};
     const user = document.getElementById('f-user').value;
     const year = document.getElementById('f-year').value;
-    const platform = document.getElementById('f-platform').value;
     const track = document.getElementById('f-track').value;
-    const category = document.getElementById('f-category').value;
-    const categoryL2 = document.getElementById('f-category-l2').value;
     const dateFrom = document.getElementById('f-date-from').value;
     const dateTo = document.getElementById('f-date-to').value;
 
     if (user) f.user = user;
     if (year) f.year = year;
-    if (platform) f.platform = platform;
     if (track) f.track = track;
 
-    // Drill-down overrides L1 if not explicitly set
-    if (category) f.category = category;
+    // Multi-select platform
+    if (selectedPlatforms.length > 0) f.platform = selectedPlatforms.join(',');
+
+    // Multi-select L1 — drill-down overrides if no explicit selection
+    if (selectedL1s.length > 0) f.category = selectedL1s.join(',');
     else if (pieDrillDownL1) f.category = pieDrillDownL1;
 
-    // Drill-down overrides L2 if not explicitly set
-    if (categoryL2) f.category_l2 = categoryL2;
+    // Multi-select L2 — drill-down overrides if no explicit selection
+    if (selectedL2s.length > 0) f.category_l2 = selectedL2s.join(',');
     else if (pieDrillDownL2) f.category_l2 = pieDrillDownL2;
 
     if (dateFrom) f.date_from = dateFrom;
@@ -50,6 +57,89 @@ function getFilters() {
 
     return f;
 }
+
+// ── Multi-Select Dropdown Component ──────────────────────────
+function createMultiSelect(containerId, options, selectedArr, onChange) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = '';
+    container.className = 'multi-select';
+
+    // Display area showing selected items
+    const display = document.createElement('div');
+    display.className = 'ms-display';
+
+    const updateDisplay = () => {
+        if (selectedArr.length === 0) {
+            display.innerHTML = `<span class="ms-placeholder">${container.dataset.placeholder || '全部'}</span>`;
+        } else {
+            display.innerHTML = selectedArr.map(v => {
+                const opt = options.find(o => o.value === v);
+                return `<span class="ms-pill">${opt ? opt.label : v}<span class="ms-pill-x" data-val="${v}">✕</span></span>`;
+            }).join('');
+        }
+    };
+    updateDisplay();
+    container.appendChild(display);
+
+    // Dropdown panel
+    const panel = document.createElement('div');
+    panel.className = 'ms-panel';
+
+    options.forEach(opt => {
+        const item = document.createElement('label');
+        item.className = 'ms-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = opt.value;
+        cb.checked = selectedArr.includes(opt.value);
+        cb.addEventListener('change', () => {
+            if (cb.checked) {
+                if (!selectedArr.includes(opt.value)) selectedArr.push(opt.value);
+            } else {
+                const idx = selectedArr.indexOf(opt.value);
+                if (idx >= 0) selectedArr.splice(idx, 1);
+            }
+            updateDisplay();
+            if (onChange) onChange();
+        });
+        item.appendChild(cb);
+        item.appendChild(document.createTextNode(opt.label));
+        panel.appendChild(item);
+    });
+
+    container.appendChild(panel);
+
+    // Toggle dropdown
+    display.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Close all other dropdowns
+        document.querySelectorAll('.multi-select.open').forEach(ms => {
+            if (ms !== container) ms.classList.remove('open');
+        });
+        container.classList.toggle('open');
+    });
+
+    // Remove pill
+    display.addEventListener('click', (e) => {
+        if (e.target.classList.contains('ms-pill-x')) {
+            e.stopPropagation();
+            const val = e.target.dataset.val;
+            const idx = selectedArr.indexOf(val);
+            if (idx >= 0) selectedArr.splice(idx, 1);
+            // Uncheck the checkbox
+            panel.querySelectorAll('input').forEach(cb => {
+                if (cb.value === val) cb.checked = false;
+            });
+            updateDisplay();
+            if (onChange) onChange();
+        }
+    });
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', () => {
+    document.querySelectorAll('.multi-select.open').forEach(ms => ms.classList.remove('open'));
+});
 
 // ── Meta: Populate Filter Dropdowns ──────────────────────────
 async function loadMeta() {
@@ -73,23 +163,34 @@ async function loadMeta() {
         yearSel.appendChild(opt);
     });
 
-    // Taxonomy (L1 + L2)
+    // Taxonomy
     taxonomyData = data.taxonomy;
-    const catSel = document.getElementById('f-category');
+
+    // Platform multi-select
+    createMultiSelect('ms-platform', [
+        { value: 'alipay', label: '支付宝' },
+        { value: 'wechat', label: '微信' },
+        { value: 'jd', label: '京东' },
+        { value: 'meituan', label: '美团' },
+    ], selectedPlatforms);
+
+    // L1 multi-select
+    const l1Options = data.taxonomy.map(t => ({
+        value: t.l1,
+        label: `${t.l1} (${t.count})`,
+    }));
+    createMultiSelect('ms-category', l1Options, selectedL1s, updateL2MultiSelect);
+
+    // L2 multi-select
+    updateL2MultiSelect();
+
+    // Exclude selector (keep as single select for adding)
     const excludeSel = document.getElementById('f-exclude-add');
-
     data.taxonomy.forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t.l1;
-        opt.textContent = `${t.l1} (${t.count})`;
-        catSel.appendChild(opt);
-
         const opt2 = document.createElement('option');
         opt2.value = t.l1;
         opt2.textContent = t.l1;
         excludeSel.appendChild(opt2);
-
-        // Also allow excluding specific L2s
         t.l2s.forEach(l2 => {
             const opt3 = document.createElement('option');
             opt3.value = l2;
@@ -97,40 +198,25 @@ async function loadMeta() {
             excludeSel.appendChild(opt3);
         });
     });
-
-    document.getElementById('f-category').addEventListener('change', updateL2Options);
-    updateL2Options(); // Populate L2 initially
 }
 
-function updateL2Options() {
-    const l1 = document.getElementById('f-category').value;
-    const l2Sel = document.getElementById('f-category-l2');
-    l2Sel.innerHTML = '<option value="">全部二级</option>';
-
-    if (l1) {
-        const entry = taxonomyData.find(t => t.l1 === l1);
-        if (entry) {
-            entry.l2s.forEach(l2 => {
-                const opt = document.createElement('option');
-                opt.value = l2;
-                opt.textContent = l2;
-                l2Sel.appendChild(opt);
-            });
-        }
+function updateL2MultiSelect() {
+    let l2Options = [];
+    if (selectedL1s.length > 0) {
+        selectedL1s.forEach(l1 => {
+            const entry = taxonomyData.find(t => t.l1 === l1);
+            if (entry) {
+                entry.l2s.forEach(l2 => l2Options.push({ value: l2, label: l2 }));
+            }
+        });
     } else {
-        // If no L1 is selected, group all L2s by L1
         taxonomyData.forEach(t => {
-            const group = document.createElement('optgroup');
-            group.label = t.l1;
-            t.l2s.forEach(l2 => {
-                const opt = document.createElement('option');
-                opt.value = l2;
-                opt.textContent = l2;
-                group.appendChild(opt);
-            });
-            l2Sel.appendChild(group);
+            t.l2s.forEach(l2 => l2Options.push({ value: l2, label: `${t.l1} · ${l2}` }));
         });
     }
+    // Remove any previously selected L2s that are no longer in the options
+    selectedL2s = selectedL2s.filter(v => l2Options.some(o => o.value === v));
+    createMultiSelect('ms-category-l2', l2Options, selectedL2s);
 }
 
 // ── Exclude Tags ─────────────────────────────────────────────
@@ -166,10 +252,6 @@ let pieChart = null;
 
 async function loadCategoryPie() {
     const filters = getFilters();
-
-    // If we are drilling down or filtering by L1, show L2 distribution
-    // If we are drilling down into L2, pie chart won't drill further, it just shows that single L2 slice (or L3 if we had it, but we don't)
-    // To keep it useful, if pieDrillDownL2 is active, the pie still shows the L2 slice, but it's 100% of itself.
     let level = 'l1';
     if (filters.category || pieDrillDownL1) level = 'l2';
 
@@ -181,13 +263,10 @@ async function loadCategoryPie() {
     if (pieChart) pieChart.destroy();
 
     const canvas = document.getElementById('category-pie');
-
-    // Update header to indicate drill-down
     const header = canvas.parentElement.querySelector('h2');
 
-    // Check if global filters are actively driving this vs pie clicks
-    const hasGlobalL1 = !!document.getElementById('f-category').value;
-    const hasGlobalL2 = !!document.getElementById('f-category-l2').value;
+    const hasGlobalL1 = selectedL1s.length > 0;
+    const hasGlobalL2 = selectedL2s.length > 0;
 
     if (pieDrillDownL2 && !hasGlobalL2) {
         header.innerHTML = `分类支出 <span style="font-size:12px;color:#5b8def;cursor:pointer" id="reset-drill-l2">(退出: ${pieDrillDownL2}) ✕</span>`;
@@ -232,7 +311,6 @@ async function loadCategoryPie() {
                         const selectedL2 = labels[idx] === '未分类' ? '' : labels[idx];
                         pieDrillDownL2 = selectedL2;
                         refreshAll();
-                        // Scroll down to the table so the user can see the filtered result
                         document.getElementById('tx-table').scrollIntoView({ behavior: 'smooth' });
                     }
                 }
@@ -289,6 +367,13 @@ async function loadTrend(granularity = 'month') {
         options: {
             responsive: true,
             maintainAspectRatio: true,
+            onClick: (e, items) => {
+                if (items.length > 0) {
+                    const idx = items[0].index;
+                    const period = labels[idx];
+                    drillDownByPeriod(period, granularity);
+                }
+            },
             scales: {
                 x: { ticks: { color: '#6b7394', font: { size: 11 } }, grid: { display: false } },
                 y: {
@@ -298,10 +383,45 @@ async function loadTrend(granularity = 'month') {
             },
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: ctx => fmt(ctx.parsed.y) } },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => `${fmt(ctx.parsed.y)}  (点击筛选此时段)`,
+                    },
+                },
             },
         },
     });
+}
+
+function drillDownByPeriod(period, granularity) {
+    let dateFrom, dateTo;
+    if (granularity === 'year') {
+        dateFrom = `${period}-01-01`;
+        dateTo = `${period}-12-31`;
+    } else if (granularity === 'month') {
+        // period format: "2025-03"
+        dateFrom = `${period}-01`;
+        const [y, m] = period.split('-').map(Number);
+        const lastDay = new Date(y, m, 0).getDate();
+        dateTo = `${period}-${String(lastDay).padStart(2, '0')}`;
+    } else if (granularity === 'week') {
+        // period format: "2025-W12" — approximate: set date_from to Monday of that week
+        // For simplicity, just fill the date fields and let the user refine
+        const [y, w] = period.replace('W', '').split('-').map(Number);
+        const jan1 = new Date(y, 0, 1);
+        const mondayOffset = (jan1.getDay() + 6) % 7;
+        const weekStart = new Date(y, 0, 1 + (w * 7) - mondayOffset);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+        dateFrom = weekStart.toISOString().slice(0, 10);
+        dateTo = weekEnd.toISOString().slice(0, 10);
+    }
+
+    if (dateFrom && dateTo) {
+        document.getElementById('f-date-from').value = dateFrom;
+        document.getElementById('f-date-to').value = dateTo;
+        refreshAll();
+    }
 }
 
 // ── Top Categories Ranking ───────────────────────────────────
@@ -322,7 +442,8 @@ async function loadTopCategories() {
         const barWidth = Math.max(5, (item.total / maxTotal) * 100);
         const name = level === 'l1' ? item.category : item.category_l2;
         const div = document.createElement('div');
-        div.className = 'ranking-item';
+        div.className = 'ranking-item clickable';
+        div.title = '点击筛选此分类';
         div.innerHTML = `
       <span class="rank-num ${i < 3 ? 'top3' : ''}">${i + 1}</span>
       <div class="rank-info">
@@ -332,6 +453,15 @@ async function loadTopCategories() {
       </div>
       <span class="rank-amount">${fmt(item.total)}</span>
     `;
+        div.addEventListener('click', () => {
+            if (level === 'l1') {
+                pieDrillDownL1 = name;
+                pieDrillDownL2 = null;
+            } else {
+                pieDrillDownL2 = name;
+            }
+            refreshAll();
+        });
         container.appendChild(div);
     });
 }
@@ -342,6 +472,7 @@ let merchantChart = null;
 async function loadMerchants() {
     const data = await api.topMerchants(getFilters(), 15);
     const labels = data.map(d => d.merchant.length > 14 ? d.merchant.slice(0, 14) + '…' : d.merchant);
+    const fullNames = data.map(d => d.merchant);
     const values = data.map(d => d.total);
 
     if (merchantChart) merchantChart.destroy();
@@ -365,6 +496,16 @@ async function loadMerchants() {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            onClick: (e, items) => {
+                if (items.length > 0) {
+                    const idx = items[0].index;
+                    const merchantName = fullNames[idx];
+                    document.getElementById('search-input').value = merchantName;
+                    currentPage = 1;
+                    loadTransactions();
+                    document.getElementById('tx-table').scrollIntoView({ behavior: 'smooth' });
+                }
+            },
             scales: {
                 x: {
                     ticks: { color: '#6b7394', callback: v => '¥' + (v >= 10000 ? (v / 10000).toFixed(1) + 'W' : v) },
@@ -374,7 +515,11 @@ async function loadMerchants() {
             },
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: ctx => `${fmt(ctx.parsed.x)} (${data[ctx.dataIndex].count}笔)` } },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => `${fmt(ctx.parsed.x)} (${data[ctx.dataIndex].count}笔)  点击查看明细`,
+                    },
+                },
             },
         },
     });
@@ -411,14 +556,12 @@ function createL1L2Selects(tx) {
     const l2Sel = document.createElement('select');
     l2Sel.className = 'edit-select';
 
-    // Populate L1
     taxonomyData.forEach(t => {
         const opt = new Option(t.l1, t.l1);
         opt.selected = t.l1 === tx.category_l1;
         l1Sel.add(opt);
     });
 
-    // Function to populate L2 based on L1
     const updateL2 = () => {
         const l1 = l1Sel.value;
         l2Sel.innerHTML = '';
@@ -433,7 +576,7 @@ function createL1L2Selects(tx) {
     };
 
     l1Sel.addEventListener('change', updateL2);
-    updateL2(); // initial populate
+    updateL2();
 
     return { l1Sel, l2Sel };
 }
@@ -442,23 +585,67 @@ async function saveTransactionEdit(tx, l1, l2, tr) {
     try {
         const btn = tr.querySelector('.btn-save');
         if (btn) btn.disabled = true;
-
         await api.updateTransaction(tx.id, l1, l2);
-
-        // Refresh table to reflect changes cleanly without full reload
         loadTransactions();
-        // And refresh summary pie if necessary
         loadCategoryPie();
         loadTopCategories();
     } catch (err) {
         alert("保存失败: " + err.message);
-        loadTransactions(); // Revert
+        loadTransactions();
     }
 }
 
 // ── Transaction Table ────────────────────────────────────────
 let currentPage = 1;
 const perPage = 50;
+
+// Sort config
+const SORT_COLUMNS = [
+    { key: 'timestamp', label: '时间' },
+    { key: 'platform', label: '平台' },
+    { key: 'counterparty', label: '交易对方' },
+    { key: 'description', label: '商品描述' },
+    { key: 'amount', label: '金额' },
+    { key: 'effective_amount', label: '实际支出' },
+    { key: 'category_l1', label: 'L1 分类' },
+    { key: 'category_l2', label: 'L2 分类' },
+    { key: 'payment_method', label: '支付方式' },
+    { key: 'track', label: '轨道' },
+    { key: null, label: '操作' },
+];
+
+function renderTableHeader() {
+    const thead = document.querySelector('#tx-table thead tr');
+    thead.innerHTML = '';
+
+    SORT_COLUMNS.forEach(col => {
+        const th = document.createElement('th');
+        if (col.key) {
+            th.className = 'sortable';
+            th.dataset.col = col.key;
+            let arrow = '';
+            if (currentSort.column === col.key) {
+                arrow = currentSort.order === 'asc' ? ' ▲' : ' ▼';
+                th.classList.add('sort-active');
+            }
+            th.textContent = col.label + arrow;
+            th.addEventListener('click', () => {
+                if (currentSort.column === col.key) {
+                    currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.column = col.key;
+                    currentSort.order = col.key === 'timestamp' || col.key === 'amount' || col.key === 'effective_amount' ? 'desc' : 'asc';
+                }
+                currentPage = 1;
+                renderTableHeader();
+                loadTransactions();
+            });
+        } else {
+            th.textContent = col.label;
+        }
+        thead.appendChild(th);
+    });
+}
 
 async function loadTransactions() {
     const filters = getFilters();
@@ -469,6 +656,8 @@ async function loadTransactions() {
         page: currentPage,
         per_page: perPage,
         search,
+        sort_by: currentSort.column,
+        sort_order: currentSort.order,
     });
 
     const tbody = document.getElementById('tx-body');
@@ -517,10 +706,8 @@ async function loadTransactions() {
         const btnEdit = tr.querySelector('.btn-edit');
         btnEdit.addEventListener('click', () => {
             const { l1Sel, l2Sel } = createL1L2Selects(tx);
-
             tr.querySelector('.l1-cell').innerHTML = '';
             tr.querySelector('.l1-cell').appendChild(l1Sel);
-
             tr.querySelector('.l2-cell').innerHTML = '';
             tr.querySelector('.l2-cell').appendChild(l2Sel);
 
@@ -529,13 +716,11 @@ async function loadTransactions() {
         <button class="btn-mini save btn-save">保存</button>
         <button class="btn-mini cancel">取消</button>
       `;
-
             actions.querySelector('.btn-save').addEventListener('click', () => {
                 saveTransactionEdit(tx, l1Sel.value, l2Sel.value, tr);
             });
-
             actions.querySelector('.cancel').addEventListener('click', () => {
-                loadTransactions(); // Just reload to cancel
+                loadTransactions();
             });
         });
 
@@ -586,7 +771,7 @@ async function refreshAll() {
 // ── Event Listeners ──────────────────────────────────────────
 function setupListeners() {
     document.getElementById('btn-apply').addEventListener('click', () => {
-        pieDrillDownL1 = null; // reset drill-down on new explicit filter
+        pieDrillDownL1 = null;
         pieDrillDownL2 = null;
         refreshAll();
     });
@@ -594,18 +779,30 @@ function setupListeners() {
     document.getElementById('btn-reset').addEventListener('click', () => {
         document.getElementById('f-user').value = '';
         document.getElementById('f-year').value = '';
-        document.getElementById('f-platform').value = '';
         document.getElementById('f-track').value = 'consumption';
-        document.getElementById('f-category').value = '';
-        document.getElementById('f-category-l2').value = '';
         document.getElementById('f-date-from').value = '';
         document.getElementById('f-date-to').value = '';
         document.getElementById('search-input').value = '';
+        // Reset multi-selects
+        selectedPlatforms.length = 0;
+        selectedL1s.length = 0;
+        selectedL2s.length = 0;
         excludedCategories = [];
         pieDrillDownL1 = null;
         pieDrillDownL2 = null;
+        currentSort = { column: 'timestamp', order: 'desc' };
         renderExcludeTags();
-        updateL2Options();
+        // Re-create multi-selects to reflect cleared state
+        createMultiSelect('ms-platform', [
+            { value: 'alipay', label: '支付宝' },
+            { value: 'wechat', label: '微信' },
+            { value: 'jd', label: '京东' },
+            { value: 'meituan', label: '美团' },
+        ], selectedPlatforms);
+        const l1Options = taxonomyData.map(t => ({ value: t.l1, label: `${t.l1} (${t.count})` }));
+        createMultiSelect('ms-category', l1Options, selectedL1s, updateL2MultiSelect);
+        updateL2MultiSelect();
+        renderTableHeader();
         refreshAll();
     });
 
@@ -642,6 +839,7 @@ function setupListeners() {
 // ── Init ─────────────────────────────────────────────────────
 async function init() {
     setupListeners();
+    renderTableHeader();
     await loadMeta();
     await refreshAll();
 }

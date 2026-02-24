@@ -37,13 +37,7 @@
       </div>
       <div class="filter-group">
         <label>📱 平台</label>
-        <select id="f-platform">
-          <option value="">全部平台</option>
-          <option value="alipay">支付宝</option>
-          <option value="wechat">微信</option>
-          <option value="jd">京东</option>
-          <option value="meituan">美团</option>
-        </select>
+        <div id="ms-platform" data-placeholder="全部平台"></div>
       </div>
       <div class="filter-group">
         <label>🔀 轨道</label>
@@ -55,15 +49,11 @@
       </div>
       <div class="filter-group">
         <label>🏷️ 一级分类</label>
-        <select id="f-category">
-          <option value="">全部分类</option>
-        </select>
+        <div id="ms-category" data-placeholder="全部分类"></div>
       </div>
       <div class="filter-group">
         <label>📋 二级分类</label>
-        <select id="f-category-l2">
-          <option value="">全部二级</option>
-        </select>
+        <div id="ms-category-l2" data-placeholder="全部二级"></div>
       </div>
       <div class="filter-group filter-date">
         <label>📆 日期范围</label>
@@ -84,6 +74,13 @@
         <button class="btn-apply" id="btn-apply">🔍 应用筛选</button>
         <button class="btn-reset" id="btn-reset">↺ 重置</button>
       </div>
+    </section>
+
+    <!-- Drill-down status bar (hidden by default, shown when drill-downs are active) -->
+    <section class="drill-bar" id="drill-bar" style="display:none">
+      <span class="drill-label">🔍 当前下钻：</span>
+      <div class="drill-chips" id="drill-chips"></div>
+      <button class="drill-clear" id="drill-clear-all">全部退出</button>
     </section>
 
     <!-- Summary Cards -->
@@ -128,11 +125,11 @@
     <!-- Rankings Row -->
     <section class="charts-row">
       <div class="chart-container">
-        <h2>🏆 Top 分类排行</h2>
+        <h2>🏆 Top 分类排行 <span style="font-size:11px;color:#6b7394">(点击筛选)</span></h2>
         <div id="top-categories-list" class="ranking-list"></div>
       </div>
       <div class="chart-container">
-        <h2>🏪 Top 15 商户</h2>
+        <h2>🏦 Top 15 商户 <span style="font-size:11px;color:#6b7394">(点击查明细)</span></h2>
         <canvas id="merchant-bar"></canvas>
       </div>
     </section>
@@ -153,19 +150,7 @@
       <div class="table-wrapper">
         <table id="tx-table">
           <thead>
-            <tr>
-              <th>时间</th>
-              <th>平台</th>
-              <th>交易对方</th>
-              <th>商品描述</th>
-              <th>金额</th>
-              <th>实际支出</th>
-              <th>L1 分类</th>
-              <th>L2 分类</th>
-              <th>支付方式</th>
-              <th>轨道</th>
-              <th>操作</th>
-            </tr>
+            <tr></tr>
           </thead>
           <tbody id="tx-body"></tbody>
         </table>

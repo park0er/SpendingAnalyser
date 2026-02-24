@@ -66,20 +66,22 @@ def _apply_global_filters(df: pd.DataFrame) -> pd.DataFrame:
     if date_to:
         df = df[df["timestamp"] <= pd.to_datetime(date_to + " 23:59:59")]
 
-    # Platform filter
+    # Platform filter (supports comma-separated multi-select)
     platform = request.args.get("platform")
     if platform:
-        df = df[df["source_platform"] == platform]
+        platforms = [p.strip() for p in platform.split(",")]
+        df = df[df["source_platform"].isin(platforms)]
 
     # Track filter
     track = request.args.get("track")
     if track:
         df = df[df["track"] == track]
 
-    # Category include (L1)
+    # Category include (L1, supports comma-separated multi-select)
     category = request.args.get("category")
     if category:
-        df = df[df["global_category_l1"] == category]
+        categories = [c.strip() for c in category.split(",")]
+        df = df[df["global_category_l1"].isin(categories)]
 
     # Category exclude (L1 or L2) — comma-separated
     exclude_cats = request.args.get("exclude_categories")
@@ -90,10 +92,11 @@ def _apply_global_filters(df: pd.DataFrame) -> pd.DataFrame:
             (~df["global_category_l2"].isin(excludes))
         ]
 
-    # L2 category filter
+    # L2 category filter (supports comma-separated multi-select)
     category_l2 = request.args.get("category_l2")
     if category_l2:
-        df = df[df["global_category_l2"] == category_l2]
+        l2s = [c.strip() for c in category_l2.split(",")]
+        df = df[df["global_category_l2"].isin(l2s)]
 
     return df
 
@@ -319,7 +322,23 @@ def transactions():
         )
         mask &= search_mask
 
-    filtered = df[mask].sort_values("timestamp", ascending=False)
+    # Server-side sorting
+    sort_by = request.args.get("sort_by", "timestamp")
+    sort_order = request.args.get("sort_order", "desc")
+    sort_col_map = {
+        "timestamp": "timestamp",
+        "amount": "amount",
+        "effective_amount": "effective_amount",
+        "counterparty": "counterparty",
+        "platform": "source_platform",
+        "category_l1": "global_category_l1",
+        "category_l2": "global_category_l2",
+        "track": "track",
+        "payment_method": "payment_method",
+    }
+    sort_column = sort_col_map.get(sort_by, "timestamp")
+    ascending = sort_order != "desc"
+    filtered = df[mask].sort_values(sort_column, ascending=ascending, na_position="last")
     total = len(filtered)
 
     # Paginate

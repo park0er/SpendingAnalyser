@@ -587,6 +587,125 @@ td.refunded {
   font-size: 12px;
 }
 
+/* ── Multi-Select Dropdown ────────────────────────────────── */
+.multi-select {
+  position: relative;
+  min-width: 110px;
+}
+
+.ms-display {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  min-height: 34px;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  transition: border-color 0.15s;
+}
+
+.multi-select.open .ms-display {
+  border-color: var(--accent-blue);
+}
+
+.ms-placeholder {
+  color: var(--text-muted);
+}
+
+.ms-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--accent-blue);
+  color: white;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ms-pill-x {
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 10px;
+}
+
+.ms-pill-x:hover {
+  opacity: 1;
+}
+
+.ms-panel {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  min-width: 180px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  z-index: 100;
+  margin-top: 4px;
+}
+
+.multi-select.open .ms-panel {
+  display: block;
+}
+
+.ms-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: background 0.1s;
+}
+
+.ms-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ms-item input[type="checkbox"] {
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+/* ── Sortable Table Headers ──────────────────────────────── */
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+th.sortable:hover {
+  color: var(--accent-blue);
+}
+
+th.sort-active {
+  color: var(--accent-blue);
+}
+
+/* ── Clickable Chart Items ───────────────────────────────── */
+.ranking-item.clickable {
+  cursor: pointer;
+}
+
+.ranking-item.clickable:hover {
+  border-color: var(--accent-blue);
+  background: var(--bg-hover);
+}
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 768px) {
   .cards-grid {
