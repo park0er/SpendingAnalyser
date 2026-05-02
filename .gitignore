@@ -3,7 +3,10 @@ output/
 __pycache__/
 *.pyc
 .venv/
+.venv-build/
 node_modules/
 dist/
 .DS_Store
 config.env
+build/
+release/

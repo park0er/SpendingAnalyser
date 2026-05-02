@@ -1,0 +1,48 @@
+{
+  "name": "spending-analyser-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SpendingAnalyser macOS desktop package",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "frontend:build": "npm --prefix frontend run build",
+    "backend:build": "pyinstaller packaging/backend.spec --noconfirm --distpath build/backend --workpath build/pyinstaller",
+    "electron:dev": "npm run frontend:build && electron .",
+    "dist:mac": "bash scripts/build_macos_dmg.sh"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.spendinganalyser.desktop",
+    "productName": "SpendingAnalyser",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend/spending-backend",
+        "to": "backend/spending-backend"
+      },
+      {
+        "from": "frontend/dist",
+        "to": "frontend"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.finance",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  }
+}

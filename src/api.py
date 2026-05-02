@@ -5,49 +5,108 @@ Serves processed spending data to the frontend.
 """
 
 import os
-import json
+import re
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pathlib import Path
+from werkzeug.utils import secure_filename
 
 from .main import run_pipeline
+from .parsers.base import create_empty_uul
 from .classifiers.taxonomy import TAXONOMY
 
 
-app = Flask(__name__)
+FRONTEND_DIR_RAW = os.environ.get("FRONTEND_DIR", "")
+FRONTEND_DIR = Path(FRONTEND_DIR_RAW).resolve() if FRONTEND_DIR_RAW else None
+
+app = Flask(
+    __name__,
+    static_folder=str(FRONTEND_DIR) if FRONTEND_DIR else None,
+    static_url_path="",
+)
 CORS(app)
 
 # Global DataFrame — loaded on startup
 _df = None
-DATA_DIR = os.environ.get("DATA_DIR", "data")
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
+DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "output"))
+CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.env"))
+
+PLATFORM_LABELS = {
+    "alipay": "支付宝",
+    "wechat": "微信支付",
+    "jd": "京东交易流水",
+    "meituan": "美团账单",
+}
+
+ALLOWED_UPLOAD_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+
+
+def _empty_df() -> pd.DataFrame:
+    df = create_empty_uul()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    return df
+
+
+def _normalise_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure API consumers can rely on the full UUL schema and dtypes."""
+    if df is None or df.empty:
+        return _empty_df()
+
+    empty = _empty_df()
+    for col in empty.columns:
+        if col not in df.columns:
+            df[col] = empty[col]
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["is_ignored"] = df["is_ignored"].fillna(False).astype(bool)
+    df["is_refunded"] = df["is_refunded"].fillna(False).astype(bool)
+    df["refund_amount"] = df["refund_amount"].fillna(0).astype(float)
+    df["effective_amount"] = df["effective_amount"].fillna(0).astype(float)
+    df["amount"] = df["amount"].fillna(0).astype(float)
+
+    text_cols = [
+        "source_platform",
+        "user_id",
+        "transaction_id",
+        "direction",
+        "counterparty",
+        "description",
+        "payment_method",
+        "status",
+        "platform_category",
+        "platform_tx_type",
+        "original_tx_id",
+        "merchant_order_id",
+        "note",
+        "track",
+        "global_category_l1",
+        "global_category_l2",
+    ]
+    for col in text_cols:
+        df[col] = df[col].fillna("")
+
+    return df
 
 
 def _get_df() -> pd.DataFrame:
     """Get or load the processed DataFrame."""
     global _df
     if _df is None:
-        csv_path = Path(OUTPUT_DIR) / "processed_data.csv"
+        csv_path = OUTPUT_DIR / "processed_data.csv"
         if csv_path.exists():
-            _df = pd.read_csv(str(csv_path), encoding="utf-8-sig")
-            _df["timestamp"] = pd.to_datetime(_df["timestamp"])
-            _df["is_ignored"] = _df["is_ignored"].fillna(False).astype(bool)
-            _df["is_refunded"] = _df["is_refunded"].fillna(False).astype(bool)
-            _df["refund_amount"] = _df["refund_amount"].fillna(0).astype(float)
-            _df["effective_amount"] = _df["effective_amount"].fillna(0).astype(float)
-            _df["global_category_l1"] = _df["global_category_l1"].fillna("")
-            _df["global_category_l2"] = _df["global_category_l2"].fillna("")
-            _df["counterparty"] = _df["counterparty"].fillna("")
-            _df["description"] = _df["description"].fillna("")
-            _df["payment_method"] = _df["payment_method"].fillna("")
+            _df = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
         else:
-            _df = run_pipeline(DATA_DIR, OUTPUT_DIR)
+            _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
     return _df
 
 
 def _apply_global_filters(df: pd.DataFrame) -> pd.DataFrame:
     """Apply global filters from query params."""
+    if df.empty:
+        return df
+
     # User filter
     user = request.args.get("user")
     if user:
@@ -113,6 +172,151 @@ def _cashflow_df(df: pd.DataFrame = None) -> pd.DataFrame:
     if df is None:
         df = _get_df()
     return df[df["track"] == "cashflow"]
+
+
+def _read_config() -> dict:
+    config = {
+        "LLM_API_KEY": "",
+        "LLM_BASE_URL": "https://api.xiaomimimo.com/anthropic",
+        "LLM_MODEL": "mimo-v2.5-pro",
+    }
+    if CONFIG_PATH.exists():
+        for line in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                config[key.strip()] = value.strip()
+    return config
+
+
+def _write_config(config: dict) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(
+        "\n".join([
+            "# SpendingAnalyser LLM 配置",
+            "# 这个文件由桌面 App 的模型配置面板自动维护。",
+            f"LLM_API_KEY={config.get('LLM_API_KEY', '')}",
+            f"LLM_BASE_URL={config.get('LLM_BASE_URL', '')}",
+            f"LLM_MODEL={config.get('LLM_MODEL', '')}",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+
+def _has_real_api_key(value: str) -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    return not any(token in lowered for token in ["your_key", "api密钥", "在此填写"])
+
+
+def _safe_upload_name(platform: str, original_name: str) -> str:
+    clean_original = Path(original_name).name
+    ext = Path(clean_original).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError("仅支持 CSV、XLSX、XLS 文件")
+
+    label = PLATFORM_LABELS[platform]
+    stem = Path(clean_original).stem
+    if stem.startswith(label):
+        return f"{stem}{ext}"
+
+    safe_stem = secure_filename(stem) or "bill"
+    safe_stem = re.sub(r"[-\s]+", "_", safe_stem).strip("_")
+    return f"{label}_{safe_stem}{ext}"
+
+
+def _detect_platform(filename: str) -> str:
+    for key, label in PLATFORM_LABELS.items():
+        if filename.startswith(label):
+            return key
+    return ""
+
+
+@app.route("/api/health")
+def health():
+    return jsonify({"ok": True})
+
+
+@app.route("/api/config", methods=["GET", "POST"])
+def config():
+    current = _read_config()
+
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        api_key = data.get("api_key")
+        if api_key:
+            current["LLM_API_KEY"] = api_key.strip()
+        current["LLM_BASE_URL"] = data.get("base_url", current["LLM_BASE_URL"]).strip()
+        current["LLM_MODEL"] = data.get("model", current["LLM_MODEL"]).strip()
+        _write_config(current)
+
+    return jsonify({
+        "api_key_configured": _has_real_api_key(current.get("LLM_API_KEY", "")),
+        "base_url": current.get("LLM_BASE_URL", ""),
+        "model": current.get("LLM_MODEL", ""),
+    })
+
+
+@app.route("/api/uploads", methods=["GET", "POST"])
+def uploads():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if request.method == "POST":
+        platform = request.form.get("platform", "")
+        if platform not in PLATFORM_LABELS:
+            return jsonify({"error": "请选择账单渠道"}), 400
+
+        incoming_files = request.files.getlist("files")
+        if not incoming_files:
+            return jsonify({"error": "请选择要上传的账单文件"}), 400
+
+        saved_files = []
+        for incoming in incoming_files:
+            if not incoming.filename:
+                continue
+            try:
+                filename = _safe_upload_name(platform, incoming.filename)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+
+            target = DATA_DIR / filename
+            counter = 1
+            while target.exists():
+                target = DATA_DIR / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
+                counter += 1
+            incoming.save(target)
+            saved_files.append({
+                "name": target.name,
+                "platform": platform,
+                "size": target.stat().st_size,
+            })
+
+        return jsonify({"files": saved_files})
+
+    files = []
+    for path in sorted(DATA_DIR.glob("*")):
+        if path.is_file() and path.suffix.lower() in ALLOWED_UPLOAD_EXTENSIONS:
+            files.append({
+                "name": path.name,
+                "platform": _detect_platform(path.name),
+                "size": path.stat().st_size,
+            })
+    return jsonify({"files": files})
+
+
+@app.route("/api/process", methods=["POST"])
+def process_data():
+    global _df
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
+    return jsonify({
+        "success": True,
+        "has_data": not _df.empty,
+        "total_records": int(len(_df)),
+    })
 
 
 @app.route("/api/meta")
@@ -405,5 +609,20 @@ def start_server(host="0.0.0.0", port=5001, debug=True):
     app.run(host=host, port=port, debug=debug)
 
 
+@app.route("/")
+@app.route("/<path:path>")
+def frontend_app(path="index.html"):
+    """Serve the built dashboard when packaged as a desktop app."""
+    if not FRONTEND_DIR:
+        return jsonify({"error": "Frontend build directory is not configured"}), 404
+
+    requested = FRONTEND_DIR / path
+    if requested.exists() and requested.is_file():
+        return send_from_directory(str(FRONTEND_DIR), path)
+    return send_from_directory(str(FRONTEND_DIR), "index.html")
+
+
 if __name__ == "__main__":
-    start_server()
+    port = int(os.environ.get("PORT", "5001"))
+    debug = os.environ.get("SPENDING_DESKTOP") != "1"
+    start_server(port=port, debug=debug)

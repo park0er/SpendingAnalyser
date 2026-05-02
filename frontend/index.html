@@ -21,6 +21,60 @@
       </div>
     </header>
 
+    <!-- Desktop Setup Workbench -->
+    <section class="setup-workbench" id="setup-workbench">
+      <div class="setup-card upload-card">
+        <div class="setup-card-head">
+          <div>
+            <h2>上传账单</h2>
+            <p id="upload-count">未上传文件</p>
+          </div>
+          <span class="setup-step">1</span>
+        </div>
+        <div class="upload-controls">
+          <select id="upload-platform">
+            <option value="alipay">支付宝</option>
+            <option value="wechat">微信</option>
+            <option value="jd">京东</option>
+            <option value="meituan">美团</option>
+          </select>
+          <label class="file-picker">
+            <input type="file" id="bill-files" multiple accept=".csv,.xlsx,.xls" />
+            <span id="file-picker-label">选择文件</span>
+          </label>
+          <button class="btn-primary" id="btn-upload">上传</button>
+        </div>
+        <div class="uploaded-list" id="uploaded-list"></div>
+      </div>
+
+      <div class="setup-card model-card">
+        <div class="setup-card-head">
+          <div>
+            <h2>模型配置</h2>
+            <p id="model-status">未配置</p>
+          </div>
+          <span class="setup-step">2</span>
+        </div>
+        <div class="model-grid">
+          <input type="password" id="llm-api-key" placeholder="API Key" autocomplete="off" />
+          <input type="text" id="llm-base-url" placeholder="Base URL" />
+          <input type="text" id="llm-model" placeholder="模型名称" />
+          <button class="btn-secondary" id="btn-save-config">保存配置</button>
+        </div>
+      </div>
+
+      <div class="setup-card process-card">
+        <div class="setup-card-head">
+          <div>
+            <h2>生成看板</h2>
+            <p id="process-status">等待处理</p>
+          </div>
+          <span class="setup-step">3</span>
+        </div>
+        <button class="btn-run" id="btn-process">一键分析</button>
+      </div>
+    </section>
+
     <!-- Global Filter Bar -->
     <section class="filter-bar" id="filter-bar">
       <div class="filter-group">

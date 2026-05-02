@@ -28,6 +28,13 @@ let selectedL2s = [];
 // Sort state
 let currentSort = { column: 'timestamp', order: 'desc' };
 
+function setStatus(id, text, tone = '') {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = tone ? `status-${tone}` : '';
+}
+
 function getFilters() {
     const f = {};
     const user = document.getElementById('f-user').value;
@@ -56,6 +63,120 @@ function getFilters() {
     if (excludedCategories.length > 0) f.exclude_categories = excludedCategories.join(',');
 
     return f;
+}
+
+// ── Desktop Workbench ───────────────────────────────────────
+function platformLabel(platform) {
+    return {
+        alipay: '支付宝',
+        wechat: '微信',
+        jd: '京东',
+        meituan: '美团',
+    }[platform] || platform || '未知';
+}
+
+function formatFileSize(bytes) {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+}
+
+async function loadDesktopState() {
+    const [config, uploads] = await Promise.all([
+        api.config(),
+        api.uploads(),
+    ]);
+
+    document.getElementById('llm-base-url').value = config.base_url || '';
+    document.getElementById('llm-model').value = config.model || '';
+    setStatus('model-status', config.api_key_configured ? '已保存' : '未配置', config.api_key_configured ? 'ok' : 'muted');
+    renderUploads(uploads.files || []);
+}
+
+function renderUploads(files) {
+    const list = document.getElementById('uploaded-list');
+    const count = document.getElementById('upload-count');
+    count.textContent = files.length ? `${files.length} 个文件` : '未上传文件';
+    list.innerHTML = '';
+
+    if (!files.length) {
+        list.innerHTML = '<div class="empty-upload">等待账单文件</div>';
+        return;
+    }
+
+    files.slice(-6).reverse().forEach(file => {
+        const row = document.createElement('div');
+        row.className = 'uploaded-item';
+        row.innerHTML = `
+            <span class="uploaded-platform">${platformLabel(file.platform)}</span>
+            <span class="uploaded-name" title="${file.name}">${file.name}</span>
+            <span class="uploaded-size">${formatFileSize(file.size)}</span>
+        `;
+        list.appendChild(row);
+    });
+}
+
+function setupDesktopWorkbench() {
+    const fileInput = document.getElementById('bill-files');
+    const pickerLabel = document.getElementById('file-picker-label');
+
+    fileInput.addEventListener('change', () => {
+        const count = fileInput.files.length;
+        pickerLabel.textContent = count ? `已选 ${count} 个文件` : '选择文件';
+    });
+
+    document.getElementById('btn-upload').addEventListener('click', async () => {
+        const platform = document.getElementById('upload-platform').value;
+        if (!fileInput.files.length) {
+            setStatus('upload-count', '请选择文件', 'warn');
+            return;
+        }
+
+        try {
+            setStatus('upload-count', '上传中...', 'muted');
+            await api.uploadFiles(platform, fileInput.files);
+            fileInput.value = '';
+            pickerLabel.textContent = '选择文件';
+            await loadDesktopState();
+            setStatus('process-status', '可以分析', 'ok');
+        } catch (err) {
+            setStatus('upload-count', err.message, 'warn');
+        }
+    });
+
+    document.getElementById('btn-save-config').addEventListener('click', async () => {
+        try {
+            setStatus('model-status', '保存中...', 'muted');
+            await api.saveConfig({
+                api_key: document.getElementById('llm-api-key').value,
+                base_url: document.getElementById('llm-base-url').value,
+                model: document.getElementById('llm-model').value,
+            });
+            document.getElementById('llm-api-key').value = '';
+            await loadDesktopState();
+        } catch (err) {
+            setStatus('model-status', '保存失败', 'warn');
+        }
+    });
+
+    document.getElementById('btn-process').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-process');
+        try {
+            btn.disabled = true;
+            setStatus('process-status', '分析中...', 'muted');
+            const result = await api.process();
+            if (!result.has_data) {
+                setStatus('process-status', '还没有可解析账单', 'warn');
+                return;
+            }
+            setStatus('process-status', `${result.total_records} 条记录`, 'ok');
+            await reloadDashboard();
+        } catch (err) {
+            setStatus('process-status', '分析失败', 'warn');
+        } finally {
+            btn.disabled = false;
+        }
+    });
 }
 
 // ── Multi-Select Dropdown Component ──────────────────────────
@@ -846,6 +967,10 @@ async function refreshAll() {
     ]);
 }
 
+async function reloadDashboard() {
+    window.location.reload();
+}
+
 // ── Event Listeners ──────────────────────────────────────────
 function setupListeners() {
     document.getElementById('btn-apply').addEventListener('click', () => {
@@ -925,8 +1050,10 @@ function setupListeners() {
 
 // ── Init ─────────────────────────────────────────────────────
 async function init() {
+    setupDesktopWorkbench();
     setupListeners();
     renderTableHeader();
+    await loadDesktopState();
     await loadMeta();
     await refreshAll();
 }

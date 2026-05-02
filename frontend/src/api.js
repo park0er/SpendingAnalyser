@@ -25,7 +25,37 @@ export async function putJSON(endpoint, body) {
     return res.json();
 }
 
+export async function postJSON(endpoint, body = {}) {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+}
+
+export async function uploadFiles(platform, files) {
+    const form = new FormData();
+    form.set('platform', platform);
+    Array.from(files).forEach(file => form.append('files', file));
+    const res = await fetch(`${API_BASE}/uploads`, {
+        method: 'POST',
+        body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `API error: ${res.status}`);
+    return data;
+}
+
 export const api = {
+    config: () => fetchJSON('/config'),
+    saveConfig: (config) => postJSON('/config', config),
+    uploads: () => fetchJSON('/uploads'),
+    uploadFiles,
+    process: () => postJSON('/process'),
     meta: () => fetchJSON('/meta'),
     summary: (f) => fetchJSON('/summary', f),
     byCategory: (f, level = 'l1') => fetchJSON('/by-category', { ...f, level }),
