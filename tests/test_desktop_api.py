@@ -58,6 +58,7 @@ def test_upload_stores_files_under_selected_platform_name(tmp_path, monkeypatch)
         "/api/uploads",
         data={
             "platform": "alipay",
+            "user": "我",
             "files": (io.BytesIO(b"csv-content"), "january.csv"),
         },
         content_type="multipart/form-data",
@@ -67,9 +68,11 @@ def test_upload_stores_files_under_selected_platform_name(tmp_path, monkeypatch)
     assert response.status_code == 200
     uploaded = response.get_json()["files"][0]
     assert uploaded["platform"] == "alipay"
+    assert uploaded["user"] == "我"
     assert uploaded["name"].startswith("支付宝")
-    assert (api_module.DATA_DIR / uploaded["name"]).read_bytes() == b"csv-content"
+    assert (api_module.DATA_DIR / "我" / uploaded["name"]).read_bytes() == b"csv-content"
     assert listed.get_json()["files"][0]["name"] == uploaded["name"]
+    assert listed.get_json()["files"][0]["user"] == "我"
 
 
 def test_upload_preserves_existing_chinese_platform_prefix(tmp_path, monkeypatch):
@@ -79,6 +82,7 @@ def test_upload_preserves_existing_chinese_platform_prefix(tmp_path, monkeypatch
         "/api/uploads",
         data={
             "platform": "alipay",
+            "user": "老婆",
             "files": (
                 io.BytesIO(b"csv-content"),
                 "支付宝交易明细(20250101-20251231).csv",
@@ -91,3 +95,40 @@ def test_upload_preserves_existing_chinese_platform_prefix(tmp_path, monkeypatch
     uploaded = response.get_json()["files"][0]
     assert uploaded["name"] == "支付宝交易明细(20250101-20251231).csv"
     assert uploaded["platform"] == "alipay"
+    assert uploaded["user"] == "老婆"
+
+
+def test_upload_requires_user_name(tmp_path, monkeypatch):
+    client, _api_module = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/uploads",
+        data={
+            "platform": "alipay",
+            "user": "",
+            "files": (io.BytesIO(b"csv-content"), "january.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert "用户" in response.get_json()["error"]
+
+
+def test_uploaded_users_are_available_before_processing(tmp_path, monkeypatch):
+    client, _api_module = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/uploads",
+        data={
+            "platform": "jd",
+            "user": "老婆",
+            "files": (io.BytesIO(b"csv-content"), "orders.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+    meta = client.get("/api/meta")
+
+    assert response.status_code == 200
+    assert meta.status_code == 200
+    assert meta.get_json()["users"] == [{"id": "老婆", "label": "老婆"}]

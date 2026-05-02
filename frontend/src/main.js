@@ -66,6 +66,25 @@ function getFilters() {
 }
 
 // ── Desktop Workbench ───────────────────────────────────────
+const VIEW_META = {
+    dashboard: {
+        title: '仪表盘',
+        subtitle: '跨用户、跨平台查看消费、资金流动和交易明细',
+    },
+    import: {
+        title: '导入账单',
+        subtitle: '把每批账单归到指定用户，后续可合并或分开分析',
+    },
+    process: {
+        title: '数据处理',
+        subtitle: '重新解析已上传账单，并刷新本机分析结果',
+    },
+    model: {
+        title: '模型配置',
+        subtitle: '保存用于智能分类的模型地址、名称和密钥',
+    },
+};
+
 function platformLabel(platform) {
     return {
         alipay: '支付宝',
@@ -87,6 +106,8 @@ async function loadDesktopState() {
         api.uploads(),
     ]);
 
+    const savedUser = window.localStorage.getItem('spending-analyser-upload-user');
+    if (savedUser) document.getElementById('upload-user').value = savedUser;
     document.getElementById('llm-base-url').value = config.base_url || '';
     document.getElementById('llm-model').value = config.model || '';
     setStatus('model-status', config.api_key_configured ? '已保存' : '未配置', config.api_key_configured ? 'ok' : 'muted');
@@ -96,7 +117,8 @@ async function loadDesktopState() {
 function renderUploads(files) {
     const list = document.getElementById('uploaded-list');
     const count = document.getElementById('upload-count');
-    count.textContent = files.length ? `${files.length} 个文件` : '未上传文件';
+    const userCount = new Set(files.map(file => file.user).filter(Boolean)).size;
+    count.textContent = files.length ? `${files.length} 个文件 · ${userCount || 1} 位用户` : '未上传文件';
     list.innerHTML = '';
 
     if (!files.length) {
@@ -108,6 +130,7 @@ function renderUploads(files) {
         const row = document.createElement('div');
         row.className = 'uploaded-item';
         row.innerHTML = `
+            <span class="uploaded-user">${file.user || '未分配'}</span>
             <span class="uploaded-platform">${platformLabel(file.platform)}</span>
             <span class="uploaded-name" title="${file.name}">${file.name}</span>
             <span class="uploaded-size">${formatFileSize(file.size)}</span>
@@ -119,6 +142,7 @@ function renderUploads(files) {
 function setupDesktopWorkbench() {
     const fileInput = document.getElementById('bill-files');
     const pickerLabel = document.getElementById('file-picker-label');
+    const userInput = document.getElementById('upload-user');
 
     fileInput.addEventListener('change', () => {
         const count = fileInput.files.length;
@@ -127,6 +151,12 @@ function setupDesktopWorkbench() {
 
     document.getElementById('btn-upload').addEventListener('click', async () => {
         const platform = document.getElementById('upload-platform').value;
+        const user = userInput.value.trim();
+        if (!user) {
+            setStatus('upload-count', '请填写账单归属用户', 'warn');
+            userInput.focus();
+            return;
+        }
         if (!fileInput.files.length) {
             setStatus('upload-count', '请选择文件', 'warn');
             return;
@@ -134,11 +164,13 @@ function setupDesktopWorkbench() {
 
         try {
             setStatus('upload-count', '上传中...', 'muted');
-            await api.uploadFiles(platform, fileInput.files);
+            window.localStorage.setItem('spending-analyser-upload-user', user);
+            await api.uploadFiles(platform, user, fileInput.files);
             fileInput.value = '';
             pickerLabel.textContent = '选择文件';
             await loadDesktopState();
             setStatus('process-status', '可以分析', 'ok');
+            switchView('process');
         } catch (err) {
             setStatus('upload-count', err.message, 'warn');
         }
@@ -176,6 +208,24 @@ function setupDesktopWorkbench() {
         } finally {
             btn.disabled = false;
         }
+    });
+}
+
+function switchView(view) {
+    const meta = VIEW_META[view] || VIEW_META.dashboard;
+    document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+    });
+    document.querySelectorAll('.app-view').forEach(section => {
+        section.classList.toggle('active', section.id === `view-${view}`);
+    });
+    document.getElementById('view-title').textContent = meta.title;
+    document.getElementById('view-subtitle').textContent = meta.subtitle;
+}
+
+function setupNavigation() {
+    document.querySelectorAll('.nav-item').forEach(btn => {
+        btn.addEventListener('click', () => switchView(btn.dataset.view));
     });
 }
 
@@ -268,7 +318,8 @@ async function loadMeta() {
 
     // Users
     const userSel = document.getElementById('f-user');
-    data.users.forEach(u => {
+    userSel.innerHTML = '<option value="">全部用户</option>';
+    (data.users || []).forEach(u => {
         const opt = document.createElement('option');
         opt.value = u.id;
         opt.textContent = u.label;
@@ -277,7 +328,8 @@ async function loadMeta() {
 
     // Years
     const yearSel = document.getElementById('f-year');
-    data.years.forEach(y => {
+    yearSel.innerHTML = '<option value="">全部年份</option>';
+    (data.years || []).forEach(y => {
         const opt = document.createElement('option');
         opt.value = y;
         opt.textContent = y + ' 年';
@@ -307,6 +359,7 @@ async function loadMeta() {
 
     // Exclude selector (keep as single select for adding)
     const excludeSel = document.getElementById('f-exclude-add');
+    excludeSel.innerHTML = '<option value="">点击添加排除...</option>';
     data.taxonomy.forEach(t => {
         const opt2 = document.createElement('option');
         opt2.value = t.l1;
@@ -1050,6 +1103,7 @@ function setupListeners() {
 
 // ── Init ─────────────────────────────────────────────────────
 async function init() {
+    setupNavigation();
     setupDesktopWorkbench();
     setupListeners();
     renderTableHeader();

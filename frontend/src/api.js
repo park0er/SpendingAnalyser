@@ -37,9 +37,10 @@ export async function postJSON(endpoint, body = {}) {
     return res.json();
 }
 
-export async function uploadFiles(platform, files) {
+export async function uploadFiles(platform, user, files) {
     const form = new FormData();
     form.set('platform', platform);
+    form.set('user', user);
     Array.from(files).forEach(file => form.append('files', file));
     const res = await fetch(`${API_BASE}/uploads`, {
         method: 'POST',

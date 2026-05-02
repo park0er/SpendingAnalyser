@@ -7,6 +7,7 @@ import os
 import sys
 import pandas as pd
 from pathlib import Path
+from typing import Optional
 
 from .parsers.alipay import parse_alipay
 from .parsers.wechat import parse_wechat
@@ -19,6 +20,49 @@ from .classifiers.llm_tagger import (
     apply_tag_inheritance,
     export_tag_overrides,
 )
+
+
+def _apply_user_override(df: pd.DataFrame, user_id: Optional[str]) -> pd.DataFrame:
+    if user_id and df is not None and not df.empty:
+        df = df.copy()
+        df["user_id"] = user_id
+    return df
+
+
+def _parse_data_scope(data_path: Path, user_id: Optional[str] = None) -> list[pd.DataFrame]:
+    dfs = []
+    scope_label = f" [{user_id}]" if user_id else ""
+
+    # Alipay CSV files
+    for f in sorted(data_path.glob("支付宝*.csv")):
+        print(f"  → Alipay{scope_label}: {f.name}")
+        df = _apply_user_override(parse_alipay(str(f)), user_id)
+        print(f"    {len(df)} records parsed")
+        dfs.append(df)
+
+    # WeChat XLSX files
+    wechat_files = list(data_path.glob("微信支付*.xlsx"))
+    if wechat_files:
+        print(f"  → WeChat{scope_label}: {len(wechat_files)} quarterly files")
+        df = _apply_user_override(parse_wechat(str(data_path)), user_id)
+        print(f"    {len(df)} records parsed")
+        dfs.append(df)
+
+    # JD CSV files
+    for f in sorted(data_path.glob("京东交易流水*.csv")):
+        print(f"  → JD{scope_label}: {f.name}")
+        df = _apply_user_override(parse_jd(str(f)), user_id)
+        print(f"    {len(df)} records parsed")
+        dfs.append(df)
+
+    # Meituan CSV files
+    for f in sorted(data_path.glob("美团账单*.csv")):
+        print(f"  → Meituan{scope_label}: {f.name}")
+        df = _apply_user_override(parse_meituan(str(f)), user_id)
+        print(f"    {len(df)} records parsed")
+        dfs.append(df)
+
+    return dfs
 
 
 def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
@@ -35,40 +79,18 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
     data_path = Path(data_dir)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    if not data_path.exists():
+        print("❌ No data directory found at", data_dir)
+        return pd.DataFrame()
 
     # ── Step 1: Parse ────────────────────────────────────────────
     print("📂 Step 1: Parsing data files...")
 
     dfs = []
+    dfs.extend(_parse_data_scope(data_path))
 
-    # Alipay CSV files
-    for f in sorted(data_path.glob("支付宝*.csv")):
-        print(f"  → Alipay: {f.name}")
-        df = parse_alipay(str(f))
-        print(f"    {len(df)} records parsed")
-        dfs.append(df)
-
-    # WeChat XLSX files
-    wechat_files = list(data_path.glob("微信支付*.xlsx"))
-    if wechat_files:
-        print(f"  → WeChat: {len(wechat_files)} quarterly files")
-        df = parse_wechat(str(data_path))
-        print(f"    {len(df)} records parsed")
-        dfs.append(df)
-
-    # JD CSV files
-    for f in sorted(data_path.glob("京东交易流水*.csv")):
-        print(f"  → JD: {f.name}")
-        df = parse_jd(str(f))
-        print(f"    {len(df)} records parsed")
-        dfs.append(df)
-
-    # Meituan CSV files
-    for f in sorted(data_path.glob("美团账单*.csv")):
-        print(f"  → Meituan: {f.name}")
-        df = parse_meituan(str(f))
-        print(f"    {len(df)} records parsed")
-        dfs.append(df)
+    for user_dir in sorted(p for p in data_path.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        dfs.extend(_parse_data_scope(user_dir, user_dir.name))
 
     if not dfs:
         print("❌ No data files found in", data_dir)

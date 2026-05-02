@@ -8,7 +8,8 @@
     "frontend:build": "npm --prefix frontend run build",
     "backend:build": "pyinstaller packaging/backend.spec --noconfirm --distpath build/backend --workpath build/pyinstaller",
     "electron:dev": "npm run frontend:build && electron .",
-    "dist:mac": "bash scripts/build_macos_dmg.sh"
+    "dist:mac": "bash scripts/build_macos_dmg.sh",
+    "dist:mac:all": "bash scripts/build_macos_all.sh"
   },
   "devDependencies": {
     "electron": "^39.2.7",

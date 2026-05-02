@@ -227,11 +227,54 @@ def _safe_upload_name(platform: str, original_name: str) -> str:
     return f"{label}_{safe_stem}{ext}"
 
 
+def _safe_user_id(raw_user: str) -> str:
+    user_id = (raw_user or "").strip()
+    if not user_id:
+        raise ValueError("请填写账单归属用户")
+
+    user_id = re.sub(r"[\r\n\t]+", " ", user_id)
+    user_id = re.sub(r"[\\/:\0]+", "-", user_id)
+    user_id = re.sub(r"\s+", " ", user_id).strip(" .")
+    if not user_id or user_id in {".", ".."}:
+        raise ValueError("用户名不合法")
+    if len(user_id) > 40:
+        raise ValueError("用户名最多 40 个字符")
+    return user_id
+
+
 def _detect_platform(filename: str) -> str:
     for key, label in PLATFORM_LABELS.items():
         if filename.startswith(label):
             return key
     return ""
+
+
+def _iter_upload_files():
+    if not DATA_DIR.exists():
+        return
+
+    for path in sorted(DATA_DIR.glob("*")):
+        if path.is_file() and path.suffix.lower() in ALLOWED_UPLOAD_EXTENSIONS:
+            yield path, ""
+
+    for user_dir in sorted(p for p in DATA_DIR.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        for path in sorted(user_dir.glob("*")):
+            if path.is_file() and path.suffix.lower() in ALLOWED_UPLOAD_EXTENSIONS:
+                yield path, user_dir.name
+
+
+def _uploaded_user_ids() -> list[str]:
+    return sorted({user_id for _, user_id in _iter_upload_files() if user_id})
+
+
+def _upload_file_payload(path: Path, user_id: str) -> dict:
+    return {
+        "name": path.name,
+        "relative_path": str(path.relative_to(DATA_DIR)),
+        "platform": _detect_platform(path.name),
+        "user": user_id,
+        "size": path.stat().st_size,
+    }
 
 
 @app.route("/api/health")
@@ -268,9 +311,17 @@ def uploads():
         if platform not in PLATFORM_LABELS:
             return jsonify({"error": "请选择账单渠道"}), 400
 
+        try:
+            user_id = _safe_user_id(request.form.get("user", ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
         incoming_files = request.files.getlist("files")
         if not incoming_files:
             return jsonify({"error": "请选择要上传的账单文件"}), 400
+
+        user_dir = DATA_DIR / user_id
+        user_dir.mkdir(parents=True, exist_ok=True)
 
         saved_files = []
         for incoming in incoming_files:
@@ -281,28 +332,17 @@ def uploads():
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
 
-            target = DATA_DIR / filename
+            target = user_dir / filename
             counter = 1
             while target.exists():
-                target = DATA_DIR / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
+                target = user_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
                 counter += 1
             incoming.save(target)
-            saved_files.append({
-                "name": target.name,
-                "platform": platform,
-                "size": target.stat().st_size,
-            })
+            saved_files.append(_upload_file_payload(target, user_id))
 
         return jsonify({"files": saved_files})
 
-    files = []
-    for path in sorted(DATA_DIR.glob("*")):
-        if path.is_file() and path.suffix.lower() in ALLOWED_UPLOAD_EXTENSIONS:
-            files.append({
-                "name": path.name,
-                "platform": _detect_platform(path.name),
-                "size": path.stat().st_size,
-            })
+    files = [_upload_file_payload(path, user_id) for path, user_id in _iter_upload_files()]
     return jsonify({"files": files})
 
 
@@ -316,15 +356,18 @@ def process_data():
         "success": True,
         "has_data": not _df.empty,
         "total_records": int(len(_df)),
+        "users": sorted([u for u in _df["user_id"].unique().tolist() if u]),
     })
 
 
 @app.route("/api/meta")
 def meta():
     """Metadata: available users, years, categories for filter dropdowns."""
-    df = _get_df()
+    csv_path = OUTPUT_DIR / "processed_data.csv"
+    df = _get_df() if (_df is not None or csv_path.exists()) else _empty_df()
     users = []
-    for uid in df["user_id"].unique():
+    user_ids = sorted(set([u for u in df["user_id"].unique().tolist() if u]) | set(_uploaded_user_ids()))
+    for uid in user_ids:
         users.append({"id": uid, "label": uid})
 
     years = sorted(df["timestamp"].dt.year.unique().tolist(), reverse=True)

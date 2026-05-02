@@ -34,14 +34,103 @@ body {
 }
 
 #app {
-  max-width: 1360px;
-  margin: 0 auto;
-  padding: 0 24px 48px;
+  min-height: 100vh;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 22px 18px;
+  background: #151824;
+  border-right: 1px solid var(--border);
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
+}
+
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: #e8eaf0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.brand-block h1 {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.brand-block p {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.side-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.nav-item {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: #e8eaf0;
+  color: #111827;
+}
+
+.main-shell {
+  min-width: 0;
+  padding: 0 28px 48px;
+}
+
+.app-view {
+  display: none;
+}
+
+.app-view.active {
+  display: block;
 }
 
 /* ── Header ───────────────────────────────────────────────── */
 .header {
-  padding: 32px 0 20px;
+  padding: 28px 0 20px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 20px;
   display: flex;
@@ -52,10 +141,7 @@ body {
 .header h1 {
   font-size: 26px;
   font-weight: 700;
-  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--text-primary);
 }
 
 .subtitle {
@@ -70,6 +156,35 @@ body {
   grid-template-columns: 1.4fr 1.5fr 0.8fr;
   gap: 14px;
   margin-bottom: 20px;
+}
+
+.management-panel {
+  max-width: 920px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  min-width: 0;
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.panel-head h2 {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.panel-head p,
+.panel-head span {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
 }
 
 .setup-card {
@@ -122,13 +237,14 @@ body {
 }
 
 .upload-controls {
-  grid-template-columns: 96px 1fr 76px;
+  grid-template-columns: minmax(150px, 0.9fr) 116px minmax(220px, 1.2fr) 88px;
 }
 
 .model-grid {
   grid-template-columns: minmax(140px, 1fr) minmax(170px, 1.3fr) minmax(120px, 0.9fr) 84px;
 }
 
+.upload-controls input,
 .upload-controls select,
 .model-grid input {
   background: var(--bg-secondary);
@@ -142,6 +258,7 @@ body {
   outline: none;
 }
 
+.upload-controls input:focus,
 .upload-controls select:focus,
 .model-grid input:focus {
   border-color: var(--accent-blue);
@@ -230,7 +347,7 @@ body {
 .uploaded-item,
 .empty-upload {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) 58px;
+  grid-template-columns: 84px 58px minmax(0, 1fr) 58px;
   gap: 8px;
   align-items: center;
   background: var(--bg-secondary);
@@ -247,6 +364,13 @@ body {
 
 .uploaded-platform {
   color: var(--accent-green);
+  white-space: nowrap;
+}
+
+.uploaded-user {
+  color: var(--accent-amber);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -999,7 +1123,33 @@ th.sort-active {
 
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 1100px) {
-  .setup-workbench {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    padding: 14px 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand-block {
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  }
+
+  .side-nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .nav-item {
+    text-align: center;
+  }
+
+  .setup-workbench,
+  .upload-controls {
     grid-template-columns: 1fr;
   }
 
@@ -1013,8 +1163,12 @@ th.sort-active {
 }
 
 @media (max-width: 768px) {
-  #app {
+  .main-shell {
     padding: 0 14px 32px;
+  }
+
+  .side-nav {
+    grid-template-columns: 1fr 1fr;
   }
 
   .upload-controls,
