@@ -1,6 +1,9 @@
 import importlib
 import io
 import json
+import sys
+import time
+import types
 
 import pandas as pd
 
@@ -365,6 +368,102 @@ def test_llm_result_merge_preserves_manual_batch_result(tmp_path, monkeypatch):
         {"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"},
         {"index": 2, "l1": "购物消费", "l2": "日用百货"},
     ]
+
+
+def test_run_tagging_consumes_active_upload_batch_results(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    client.post(
+        "/api/uploads",
+        data={
+            "platform": "alipay",
+            "user": "我",
+            "files": (io.BytesIO(b"csv-content"), "january.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    def fake_pipeline(_data_dir, output_dir, **_kwargs):
+        output_path = api_module.Path(output_dir)
+        df = create_empty_uul()
+        df.loc[len(df)] = {
+            "source_platform": "alipay",
+            "user_id": "我",
+            "transaction_id": "tx-llm",
+            "timestamp": "2026-01-01 10:00:00",
+            "direction": "支出",
+            "amount": 10.0,
+            "counterparty": "商户",
+            "description": "商品",
+            "payment_method": "",
+            "status": "交易成功",
+            "platform_category": "",
+            "platform_tx_type": "",
+            "original_tx_id": "",
+            "merchant_order_id": "",
+            "note": "",
+            "track": "consumption",
+            "is_refunded": False,
+            "refund_amount": 0.0,
+            "effective_amount": 10.0,
+            "is_ignored": False,
+            "global_category_l1": "",
+            "global_category_l2": "",
+        }
+        tagging_dir = output_path / "tagging_batches"
+        tagging_dir.mkdir(parents=True, exist_ok=True)
+        (tagging_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
+        (tagging_dir / "manifest.json").write_text(
+            json.dumps([{"file": str(tagging_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
+            encoding="utf-8",
+        )
+        output_path.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path / "processed_data.csv", index=False, encoding="utf-8-sig")
+        return df
+
+    class FakeMessages:
+        def create(self, **_kwargs):
+            return types.SimpleNamespace(
+                content=[
+                    types.SimpleNamespace(
+                        type="text",
+                        text=json.dumps([{"index": 1, "l1": "餐饮美食", "l2": "堂食正餐"}], ensure_ascii=False),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, **_kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeAnthropic))
+    client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Fake",
+            "api_key": "sk-fake",
+            "base_url": "https://example.test/anthropic",
+            "model": "fake-model",
+            "make_active": True,
+        },
+    )
+    client.post("/api/process")
+
+    response = client.post("/api/tagging/run")
+    latest = None
+    for _ in range(40):
+        latest = client.get("/api/tagging/status").get_json()["latest_task"]
+        if latest and latest["status"] != "queued" and latest["status"] != "running":
+            break
+        time.sleep(0.05)
+    tx = client.get("/api/transactions").get_json()["records"][0]
+    status = client.get("/api/tagging/status").get_json()
+
+    assert response.status_code == 200
+    assert latest["status"] == "completed"
+    assert tx["category_l1"] == "餐饮美食"
+    assert tx["category_l2"] == "堂食正餐"
+    assert status["batches"] == {"total": 1, "completed": 1, "pending": 0}
 
 
 def test_apply_existing_tagging_results_updates_dashboard_data(tmp_path, monkeypatch):
