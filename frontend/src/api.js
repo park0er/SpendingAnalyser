@@ -88,5 +88,8 @@ export const api = {
     topCategories: (f, level = 'l1', limit = 20) => fetchJSON('/top-categories', { ...f, level, limit }),
     cashflowSummary: (f) => fetchJSON('/cashflow-summary', f),
     transactions: (params) => fetchJSON('/transactions', params),
-    updateTransaction: (txId, l1, l2) => putJSON(`/transactions/${encodeURIComponent(txId)}`, { category_l1: l1, category_l2: l2 })
+    updateTransaction: (txId, l1, l2, processedVersionId = '') => putJSON(
+        `/transactions/${encodeURIComponent(txId)}`,
+        { category_l1: l1, category_l2: l2, processed_version_id: processedVersionId }
+    )
 };

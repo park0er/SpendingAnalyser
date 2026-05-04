@@ -203,6 +203,11 @@
                 <strong>生成版本</strong>
                 <small>写入一个可切换的 Processed Data 快照</small>
               </div>
+              <div class="workflow-step">
+                <span>4</span>
+                <strong>完整完成</strong>
+                <small>待打标为 0 后作为正式分析视图</small>
+              </div>
             </div>
             <div class="upload-controls">
               <input type="text" id="upload-user" value="我" maxlength="40" placeholder="用户，例如：我 / 老婆" />
@@ -222,7 +227,7 @@
             <div class="process-actions">
               <button class="btn-run" id="btn-process">确认生成 Processed Data</button>
               <button class="btn-secondary" id="btn-run-tagging">补跑 LLM 打标</button>
-              <button class="btn-secondary" id="btn-apply-tagging">应用已有结果</button>
+              <button class="btn-secondary advanced-action" id="btn-apply-tagging">重新合并已有打标结果</button>
             </div>
             <div class="tagging-panel">
               <div class="tagging-stats">

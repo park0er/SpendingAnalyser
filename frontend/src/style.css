@@ -345,7 +345,7 @@ body {
 
 .workflow-steps {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -386,6 +386,10 @@ body {
 
 .workflow-step.active {
   border-color: var(--accent-blue);
+}
+
+.advanced-action {
+  color: var(--text-muted);
 }
 
 .version-list {

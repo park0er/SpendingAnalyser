@@ -420,6 +420,41 @@ def _update_active_processed_version(status: str = "processed") -> Optional[dict
     return active
 
 
+def _write_processed_version_df(version_id: str, df: pd.DataFrame) -> dict:
+    data = _read_processed_versions()
+    versions = data.get("versions", [])
+    version = next((v for v in versions if v.get("id") == version_id), None)
+    if not version:
+        raise ValueError("Processed Data 版本不存在")
+
+    csv_path = _version_csv_path(version_id)
+    if not csv_path.exists():
+        raise ValueError("Processed Data 版本文件不存在")
+
+    df = _normalise_df(df)
+    version_dir = PROCESSED_VERSIONS_DIR / version_id
+    version_dir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    export_tag_overrides(df, str(_version_overrides_path(version_id)))
+
+    counts = _tagging_record_counts_from_df(df)
+    version["status"] = "processed" if counts["pending_l2"] == 0 else "pending_tagging"
+    version["updated_at"] = _now_iso()
+    version["records"] = counts
+    _write_processed_versions({"active_id": data.get("active_id", ""), "versions": versions})
+
+    if data.get("active_id") == version_id:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(csv_path, OUTPUT_DIR / "processed_data.csv")
+        overrides_path = _version_overrides_path(version_id)
+        if overrides_path.exists():
+            shutil.copy2(overrides_path, OUTPUT_DIR / "tag_overrides.csv")
+        global _df
+        _df = df
+
+    return version
+
+
 def _activate_processed_version(version_id: str) -> dict:
     data = _read_processed_versions()
     version = next((v for v in data.get("versions", []) if v.get("id") == version_id), None)
@@ -1313,14 +1348,28 @@ def transactions():
 @app.route("/api/transactions/<path:tx_id>", methods=["PUT"])
 def update_transaction(tx_id):
     """Update a transaction's L1 and L2 categories."""
-    df = _get_df()
-    data = request.json
+    data = request.json or {}
 
     if "category_l1" not in data or "category_l2" not in data:
         return jsonify({"error": "Missing category data"}), 400
 
     l1 = data["category_l1"]
     l2 = data["category_l2"]
+    version_id = (data.get("processed_version_id") or request.args.get("processed_version_id") or "").strip()
+
+    if _read_processed_versions().get("versions") and not version_id:
+        return jsonify({"error": "请指定要编辑的 Processed Data 版本"}), 400
+
+    if version_id:
+        try:
+            csv_path = _version_csv_path(version_id)
+            if not csv_path.exists():
+                raise ValueError("Processed Data 版本文件不存在")
+            df = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+    else:
+        df = _get_df()
 
     # Find the record by transaction_id
     mask = df["transaction_id"] == tx_id
@@ -1330,7 +1379,14 @@ def update_transaction(tx_id):
     df.loc[mask, "global_category_l1"] = l1
     df.loc[mask, "global_category_l2"] = l2
 
-    # Save back to CSV
+    if version_id:
+        try:
+            processed_version = _write_processed_version_df(version_id, df)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        return jsonify({"success": True, "processed_version": processed_version})
+
+    # Legacy workspace edit path, used only when no Processed Data versions exist yet.
     csv_path = Path(OUTPUT_DIR) / "processed_data.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
     export_tag_overrides(df, str(OUTPUT_DIR / "tag_overrides.csv"))

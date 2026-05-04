@@ -144,8 +144,12 @@ async function loadDesktopState() {
 function versionLabel(version) {
     const records = version.records || {};
     const count = records.total ?? 0;
-    const status = version.status === 'processed' ? '已完成' : '待打标';
+    const status = versionStatusLabel(version);
     return `${version.name || version.id} · ${count} 条 · ${status}`;
+}
+
+function versionStatusLabel(version) {
+    return version.status === 'processed' ? '完整完成' : '待打标';
 }
 
 function renderProcessedVersions() {
@@ -184,7 +188,7 @@ function renderProcessedVersions() {
             <div class="version-meta">
                 <span>${version.records?.total ?? 0} 条流水</span>
                 <span>${version.records?.pending_l2 ?? 0} 条待打标</span>
-                <span>${version.status === 'processed' ? '已完成' : '待打标'}</span>
+                <span>${versionStatusLabel(version)}</span>
             </div>
             <div class="version-actions">
                 <button class="btn-secondary" data-action="activate-version">用于看板</button>
@@ -522,14 +526,14 @@ function setupDesktopWorkbench() {
 
     document.getElementById('btn-apply-tagging').addEventListener('click', async () => {
         try {
-            setStatus('workflow-status', '正在应用已有结果...', 'muted');
+            setStatus('workflow-status', '正在重新合并已有打标结果...', 'muted');
             const result = await api.applyTagging();
-            setStatus('workflow-status', `已应用 ${result.applied_records || 0} 条结果`, 'ok');
+            setStatus('workflow-status', `已重新合并 ${result.applied_records || 0} 条已有打标结果`, 'ok');
             await loadTaggingStatus();
             await loadDesktopState();
             await reloadDashboard();
         } catch (err) {
-            setStatus('workflow-status', err.message || '应用结果失败', 'warn');
+            setStatus('workflow-status', err.message || '重新合并结果失败', 'warn');
         }
     });
 
@@ -1139,7 +1143,12 @@ async function saveTransactionEdit(tx, l1, l2, tr) {
     try {
         const btn = tr.querySelector('.btn-save');
         if (btn) btn.disabled = true;
-        await api.updateTransaction(tx.id, l1, l2);
+        const versionId = processedVersionsState.active_id || '';
+        if ((processedVersionsState.versions || []).length && !versionId) {
+            throw new Error('请先选择要编辑的 Processed Data 版本');
+        }
+        await api.updateTransaction(tx.id, l1, l2, versionId);
+        await loadDesktopState();
         loadTransactions();
         loadCategoryPie();
         loadTopCategories();

@@ -341,12 +341,61 @@ def test_process_creates_processed_data_version_and_can_switch_versions(tmp_path
     assert tx["id"] == "tx-first"
 
 
+def test_manual_category_update_requires_processed_version_when_versions_exist(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+    api_module._save_processed_version("初始版本", status="processed")
+
+    response = client.put("/api/transactions/tx-1", json={"category_l1": "餐饮美食", "category_l2": "堂食正餐"})
+
+    assert response.status_code == 400
+    assert "版本" in response.get_json()["error"]
+
+
+def test_manual_category_update_targets_requested_processed_version(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1", "counterparty": "版本一"}])
+    first = api_module._save_processed_version("版本一", status="pending_tagging")
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1", "counterparty": "版本二"}])
+    second = api_module._save_processed_version("版本二", status="pending_tagging")
+
+    response = client.put(
+        "/api/transactions/tx-1",
+        json={
+            "processed_version_id": first["id"],
+            "category_l1": "餐饮美食",
+            "category_l2": "堂食正餐",
+        },
+    )
+    client.post("/api/processed-versions/active", json={"id": first["id"]})
+    first_tx = client.get("/api/transactions").get_json()["records"][0]
+    client.post("/api/processed-versions/active", json={"id": second["id"]})
+    second_tx = client.get("/api/transactions").get_json()["records"][0]
+    versions = {v["id"]: v for v in client.get("/api/processed-versions").get_json()["versions"]}
+
+    assert response.status_code == 200
+    assert first_tx["category_l1"] == "餐饮美食"
+    assert first_tx["category_l2"] == "堂食正餐"
+    assert second_tx["category_l1"] == ""
+    assert second_tx["category_l2"] == ""
+    assert versions[first["id"]]["status"] == "processed"
+    assert versions[first["id"]]["records"]["pending_l2"] == 0
+    assert versions[second["id"]]["status"] == "pending_tagging"
+
+
 def test_manual_category_update_updates_active_processed_version(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
     _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
     version = api_module._save_processed_version("初始版本", status="processed")
 
-    response = client.put("/api/transactions/tx-1", json={"category_l1": "餐饮美食", "category_l2": "堂食正餐"})
+    response = client.put(
+        "/api/transactions/tx-1",
+        json={
+            "processed_version_id": version["id"],
+            "category_l1": "餐饮美食",
+            "category_l2": "堂食正餐",
+        },
+    )
     client.post("/api/processed-versions/active", json={"id": version["id"]})
     tx = client.get("/api/transactions").get_json()["records"][0]
 
