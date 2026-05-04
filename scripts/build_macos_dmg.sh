@@ -55,4 +55,4 @@ npm run frontend:build
 xattr -cr node_modules/electron 2>/dev/null || true
 xattr -cr build/backend 2>/dev/null || true
 file build/backend/spending-backend/spending-backend
-npx electron-builder --mac dmg "--$ELECTRON_ARCH"
+CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dmg "--$ELECTRON_ARCH"

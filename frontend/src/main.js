@@ -222,6 +222,17 @@ async function loadTaggingStatus() {
     }
 }
 
+function modelProfileFormPayload(extra = {}) {
+    return {
+        name: document.getElementById('model-profile-name').value,
+        api_key: document.getElementById('llm-api-key').value,
+        base_url: document.getElementById('llm-base-url').value,
+        model: document.getElementById('llm-model').value,
+        make_active: true,
+        ...extra,
+    };
+}
+
 function setupDesktopWorkbench() {
     const fileInput = document.getElementById('bill-files');
     const pickerLabel = document.getElementById('file-picker-label');
@@ -262,18 +273,30 @@ function setupDesktopWorkbench() {
     document.getElementById('btn-save-config').addEventListener('click', async () => {
         try {
             setStatus('model-status', '保存中...', 'muted');
-            await api.saveModelProfile({
-                id: document.getElementById('model-profile-select').value || undefined,
-                name: document.getElementById('model-profile-name').value,
-                api_key: document.getElementById('llm-api-key').value,
-                base_url: document.getElementById('llm-base-url').value,
-                model: document.getElementById('llm-model').value,
-                make_active: true,
-            });
+            const selectedId = document.getElementById('model-profile-select').value || undefined;
+            await api.saveModelProfile(modelProfileFormPayload({
+                create_new: true,
+                source_profile_id: selectedId,
+            }));
             document.getElementById('llm-api-key').value = '';
             await loadDesktopState();
+            setStatus('model-status', '已新增配置', 'ok');
         } catch (err) {
             setStatus('model-status', '保存失败', 'warn');
+        }
+    });
+
+    document.getElementById('btn-update-config').addEventListener('click', async () => {
+        const id = document.getElementById('model-profile-select').value;
+        if (!id) return;
+        try {
+            setStatus('model-status', '更新中...', 'muted');
+            await api.saveModelProfile(modelProfileFormPayload({ id }));
+            document.getElementById('llm-api-key').value = '';
+            await loadDesktopState();
+            setStatus('model-status', '已更新配置', 'ok');
+        } catch (err) {
+            setStatus('model-status', '更新失败', 'warn');
         }
     });
 

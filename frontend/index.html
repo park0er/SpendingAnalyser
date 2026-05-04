@@ -262,7 +262,10 @@
                 <input type="text" id="llm-model" placeholder="owner/model-name" />
                 <label for="llm-api-key">API Key</label>
                 <input type="password" id="llm-api-key" placeholder="保存后不回显" autocomplete="off" />
-                <button class="btn-primary" id="btn-save-config">保存并设为当前</button>
+                <div class="model-actions">
+                  <button class="btn-primary" id="btn-save-config">保存为新配置</button>
+                  <button class="btn-secondary" id="btn-update-config">更新选中配置</button>
+                </div>
               </div>
             </div>
           </div>

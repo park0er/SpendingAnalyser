@@ -472,9 +472,13 @@ def model_profiles():
 
     if request.method == "POST":
         payload = request.get_json(silent=True) or {}
-        profile_id = payload.get("id") or f"profile-{uuid.uuid4().hex[:10]}"
+        create_new = bool(payload.get("create_new"))
+        profile_id = None if create_new else payload.get("id")
+        profile_id = profile_id or f"profile-{uuid.uuid4().hex[:10]}"
         profiles = data.get("profiles", [])
-        existing = next((p for p in profiles if p.get("id") == profile_id), None)
+        source_profile_id = payload.get("source_profile_id") or payload.get("id")
+        source_profile = next((p for p in profiles if p.get("id") == source_profile_id), None)
+        existing = None if create_new else next((p for p in profiles if p.get("id") == profile_id), None)
         profile = existing or {"id": profile_id}
 
         profile["name"] = (payload.get("name") or profile.get("name") or payload.get("model") or "未命名模型").strip()
@@ -482,6 +486,8 @@ def model_profiles():
         profile["model"] = (payload.get("model") or profile.get("model") or "").strip()
         if payload.get("api_key"):
             profile["api_key"] = payload.get("api_key").strip()
+        elif create_new and source_profile:
+            profile["api_key"] = source_profile.get("api_key", "")
         else:
             profile["api_key"] = profile.get("api_key", "")
 

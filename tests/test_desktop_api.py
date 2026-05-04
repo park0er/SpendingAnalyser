@@ -304,3 +304,73 @@ def test_model_profiles_can_be_saved_and_switched_without_exposing_keys(tmp_path
     assert config.get_json()["base_url"] == "https://backup.example/anthropic"
     assert config.get_json()["model"] == "backup-model"
     assert "sk-backup-secret" in api_module.CONFIG_PATH.read_text(encoding="utf-8")
+
+
+def test_model_profile_create_new_does_not_overwrite_selected_profile(tmp_path, monkeypatch):
+    client, _api_module = make_client(tmp_path, monkeypatch)
+
+    first = client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Opus",
+            "api_key": "sk-opus-secret",
+            "base_url": "https://opus.example/anthropic",
+            "model": "opus-model",
+            "make_active": True,
+        },
+    )
+    first_id = first.get_json()["profile"]["id"]
+
+    second = client.post(
+        "/api/model-profiles",
+        json={
+            "id": first_id,
+            "create_new": True,
+            "name": "Haiku",
+            "api_key": "sk-haiku-secret",
+            "base_url": "https://haiku.example/anthropic",
+            "model": "haiku-model",
+            "make_active": True,
+        },
+    )
+
+    assert second.status_code == 200
+    profiles = client.get("/api/model-profiles").get_json()
+    assert len(profiles["profiles"]) == 3
+    assert {"Opus", "Haiku"}.issubset({profile["name"] for profile in profiles["profiles"]})
+    assert profiles["active_id"] != first_id
+
+
+def test_model_profile_create_new_can_reuse_selected_key(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+
+    first = client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Company Gateway",
+            "api_key": "sk-shared-secret",
+            "base_url": "https://gateway.example/anthropic",
+            "model": "opus-model",
+            "make_active": True,
+        },
+    )
+    first_id = first.get_json()["profile"]["id"]
+
+    response = client.post(
+        "/api/model-profiles",
+        json={
+            "id": first_id,
+            "source_profile_id": first_id,
+            "create_new": True,
+            "name": "Company Gateway Haiku",
+            "base_url": "https://gateway.example/anthropic",
+            "model": "haiku-model",
+            "make_active": True,
+        },
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["profile"]["api_key_configured"] is True
+    assert "sk-shared-secret" not in response.get_data(as_text=True)
+    assert "sk-shared-secret" in api_module.CONFIG_PATH.read_text(encoding="utf-8")

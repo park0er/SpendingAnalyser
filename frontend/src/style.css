@@ -297,6 +297,12 @@ body {
   gap: 8px;
 }
 
+.model-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
 .file-picker {
   position: relative;
   display: flex;
@@ -1272,6 +1278,7 @@ th.sort-active {
   .setup-workbench,
   .upload-controls,
   .model-profile-layout,
+  .model-actions,
   .process-actions,
   .tagging-stats {
     grid-template-columns: 1fr;
@@ -1293,6 +1300,7 @@ th.sort-active {
 
   .upload-controls,
   .model-profile-layout,
+  .model-actions,
   .process-actions,
   .tagging-stats {
     grid-template-columns: 1fr;
