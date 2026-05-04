@@ -218,6 +218,56 @@ def test_tagging_status_reports_batches_and_task_history(tmp_path, monkeypatch):
     assert payload["tasks"][0]["id"] == "task-1"
 
 
+def test_process_response_separates_total_rows_from_pending_tagging_records(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    df = create_empty_uul()
+    df.loc[len(df)] = {
+        "source_platform": "alipay",
+        "user_id": "我",
+        "transaction_id": "consume-1",
+        "timestamp": "2026-01-01 10:00:00",
+        "direction": "支出",
+        "amount": 10.0,
+        "counterparty": "餐厅",
+        "description": "午餐",
+        "payment_method": "",
+        "status": "交易成功",
+        "platform_category": "",
+        "platform_tx_type": "",
+        "original_tx_id": "",
+        "merchant_order_id": "",
+        "note": "",
+        "track": "consumption",
+        "is_refunded": False,
+        "refund_amount": 0.0,
+        "effective_amount": 10.0,
+        "is_ignored": False,
+        "global_category_l1": "",
+        "global_category_l2": "",
+    }
+    df.loc[len(df)] = {
+        **df.iloc[0].to_dict(),
+        "transaction_id": "cash-1",
+        "track": "cashflow",
+        "counterparty": "银行",
+    }
+
+    def fake_pipeline(_data_dir, output_dir):
+        api_module.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        df.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+        return df
+
+    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
+
+    response = client.post("/api/process")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total_records"] == 2
+    assert payload["consumption_records"] == 1
+    assert payload["pending_tagging_records"] == 1
+
+
 def test_model_profiles_can_be_saved_and_switched_without_exposing_keys(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
 

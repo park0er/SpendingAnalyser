@@ -160,9 +160,15 @@ function renderModelProfiles() {
 
     const active = (modelProfilesState.profiles || []).find(p => p.id === select.value);
     if (active) {
+        document.getElementById('active-model-name').textContent = active.name || active.model || '--';
+        document.getElementById('active-model-detail').textContent =
+            `${active.model || '--'} · ${active.api_key_configured ? 'Key 已保存' : '未填 Key'}`;
         document.getElementById('model-profile-name').value = active.name || '';
         document.getElementById('llm-base-url').value = active.base_url || '';
         document.getElementById('llm-model').value = active.model || '';
+    } else {
+        document.getElementById('active-model-name').textContent = '--';
+        document.getElementById('active-model-detail').textContent = '--';
     }
 }
 
@@ -170,6 +176,7 @@ function renderTaggingStatus(status) {
     if (!status) return;
     const records = status.records || {};
     const batches = status.batches || {};
+    document.getElementById('tagging-total-records').textContent = records.total ?? '--';
     document.getElementById('tagging-pending-records').textContent = records.pending_l2 ?? '--';
     document.getElementById('tagging-tagged-records').textContent = records.tagged_l2 ?? '--';
     document.getElementById('tagging-batch-progress').textContent =
@@ -295,7 +302,13 @@ function setupDesktopWorkbench() {
                 setStatus('process-status', '还没有可解析账单', 'warn');
                 return;
             }
-            setStatus('process-status', `${result.total_records} 条记录，已生成待打标任务`, 'ok');
+            const pending = result.pending_tagging_records || 0;
+            const batches = result.tagging_batches?.total || 0;
+            setStatus(
+                'process-status',
+                `共 ${result.total_records} 条流水；${pending} 条消费待打标；${batches} 个 batch`,
+                'ok'
+            );
             await loadTaggingStatus();
             await reloadDashboard();
         } catch (err) {

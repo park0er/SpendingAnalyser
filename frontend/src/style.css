@@ -231,7 +231,7 @@ body {
 }
 
 .upload-controls,
-.model-grid {
+.model-profile-layout {
   display: grid;
   gap: 8px;
 }
@@ -240,14 +240,10 @@ body {
   grid-template-columns: minmax(150px, 0.9fr) 116px minmax(220px, 1.2fr) 88px;
 }
 
-.model-grid {
-  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr);
-}
-
 .upload-controls input,
 .upload-controls select,
-.model-grid select,
-.model-grid input {
+.model-profile-layout select,
+.model-profile-layout input {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   color: var(--text-primary);
@@ -261,9 +257,44 @@ body {
 
 .upload-controls input:focus,
 .upload-controls select:focus,
-.model-grid select:focus,
-.model-grid input:focus {
+.model-profile-layout select:focus,
+.model-profile-layout input:focus {
   border-color: var(--accent-blue);
+}
+
+.active-model-card {
+  display: grid;
+  gap: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-green);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.active-model-card span,
+.active-model-card small,
+.model-profile-layout label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.active-model-card strong {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.model-profile-layout {
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.4fr);
+  gap: 14px;
+}
+
+.saved-models,
+.model-form {
+  display: grid;
+  align-content: start;
+  gap: 8px;
 }
 
 .file-picker {
@@ -355,7 +386,7 @@ body {
 
 .tagging-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1239,12 +1270,11 @@ th.sort-active {
   }
 
   .setup-workbench,
-  .upload-controls {
+  .upload-controls,
+  .model-profile-layout,
+  .process-actions,
+  .tagging-stats {
     grid-template-columns: 1fr;
-  }
-
-  .model-grid {
-    grid-template-columns: 1fr 1fr;
   }
 
   .btn-run {
@@ -1262,7 +1292,9 @@ th.sort-active {
   }
 
   .upload-controls,
-  .model-grid {
+  .model-profile-layout,
+  .process-actions,
+  .tagging-stats {
     grid-template-columns: 1fr;
   }
 

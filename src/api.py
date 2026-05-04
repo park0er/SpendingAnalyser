@@ -343,6 +343,22 @@ def _tagging_record_counts() -> dict:
     }
 
 
+def _tagging_record_counts_from_df(df: pd.DataFrame) -> dict:
+    if df is None or df.empty:
+        return {"total": 0, "consumption": 0, "tagged_l1": 0, "tagged_l2": 0, "pending_l2": 0}
+    df = _normalise_df(df)
+    cons = _consumption_df(df)
+    l1 = cons["global_category_l1"].fillna("").astype(str).str.strip()
+    l2 = cons["global_category_l2"].fillna("").astype(str).str.strip()
+    return {
+        "total": int(len(df)),
+        "consumption": int(len(cons)),
+        "tagged_l1": int((l1 != "").sum()),
+        "tagged_l2": int((l2 != "").sum()),
+        "pending_l2": int((l2 == "").sum()),
+    }
+
+
 def _apply_tagging_results_to_csv() -> int:
     global _df
     csv_path = OUTPUT_DIR / "processed_data.csv"
@@ -691,10 +707,16 @@ def process_data():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
+    record_counts = _tagging_record_counts_from_df(_df)
+    batch_counts = _tagging_batch_counts()
     return jsonify({
         "success": True,
         "has_data": not _df.empty,
         "total_records": int(len(_df)),
+        "consumption_records": record_counts["consumption"],
+        "pending_tagging_records": record_counts["pending_l2"],
+        "tagged_records": record_counts["tagged_l2"],
+        "tagging_batches": batch_counts,
         "users": sorted([u for u in _df["user_id"].unique().tolist() if u]),
     })
 

@@ -213,11 +213,15 @@
             <div class="tagging-panel">
               <div class="tagging-stats">
                 <div>
-                  <span>待打标</span>
+                  <span>全部流水</span>
+                  <strong id="tagging-total-records">--</strong>
+                </div>
+                <div>
+                  <span>消费待打标</span>
                   <strong id="tagging-pending-records">--</strong>
                 </div>
                 <div>
-                  <span>已打标</span>
+                  <span>已完成打标</span>
                   <strong id="tagging-tagged-records">--</strong>
                 </div>
                 <div>
@@ -238,14 +242,28 @@
                 <p id="model-status">未配置</p>
               </div>
             </div>
-            <div class="model-grid">
-              <select id="model-profile-select"></select>
-              <input type="text" id="model-profile-name" placeholder="配置名称，例如：Mify 主模型" />
-              <input type="password" id="llm-api-key" placeholder="API Key" autocomplete="off" />
-              <input type="text" id="llm-base-url" placeholder="Base URL" />
-              <input type="text" id="llm-model" placeholder="模型名称" />
-              <button class="btn-secondary" id="btn-activate-profile">切换</button>
-              <button class="btn-secondary" id="btn-save-config">保存配置</button>
+            <div class="active-model-card">
+              <span>当前使用中</span>
+              <strong id="active-model-name">--</strong>
+              <small id="active-model-detail">--</small>
+            </div>
+            <div class="model-profile-layout">
+              <div class="saved-models">
+                <label for="model-profile-select">已保存配置</label>
+                <select id="model-profile-select"></select>
+                <button class="btn-secondary" id="btn-activate-profile">设为当前</button>
+              </div>
+              <div class="model-form">
+                <label for="model-profile-name">配置名称</label>
+                <input type="text" id="model-profile-name" placeholder="公司网关 Opus" />
+                <label for="llm-base-url">Base URL</label>
+                <input type="text" id="llm-base-url" placeholder="http://model.mify.ai.srv/anthropic" />
+                <label for="llm-model">模型名称</label>
+                <input type="text" id="llm-model" placeholder="owner/model-name" />
+                <label for="llm-api-key">API Key</label>
+                <input type="password" id="llm-api-key" placeholder="保存后不回显" autocomplete="off" />
+                <button class="btn-primary" id="btn-save-config">保存并设为当前</button>
+              </div>
             </div>
           </div>
         </section>
