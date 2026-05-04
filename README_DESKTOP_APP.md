@@ -245,11 +245,20 @@ npm run dist:mac
 npm run dist:mac:all
 ```
 
+Intel 版默认按 macOS 12.0+ 做兼容性检查，覆盖 macOS Monterey 12.2.1。构建脚本会自动优先选择本机兼容的 x86_64 Python 3.9-3.12；如果没有找到，会要求显式指定：
+
+```bash
+PYTHON_BUILD_X64=/path/to/python3 BUILD_TARGET_ARCH=x64 npm run dist:mac
+```
+
+构建过程会扫描 App 里的 Mach-O 文件。如果某个后端二进制依赖要求高于目标系统版本，例如最低要求 macOS 14，就会直接失败，避免产出能安装但打不开的 Intel DMG。
+
 构建完成后检查：
 
 ```bash
 file release/mac-arm64/SpendingAnalyser.app/Contents/Resources/backend/spending-backend/spending-backend
 file release/mac/SpendingAnalyser.app/Contents/Resources/backend/spending-backend/spending-backend
+scripts/check_macos_binary_compat.sh release/mac/SpendingAnalyser.app 12.0
 hdiutil verify release/SpendingAnalyser-1.0.0-arm64.dmg
 hdiutil verify release/SpendingAnalyser-1.0.0-x64.dmg
 ```
@@ -258,6 +267,7 @@ hdiutil verify release/SpendingAnalyser-1.0.0-x64.dmg
 
 - ARM 后端是 `Mach-O 64-bit executable arm64`
 - x86 后端是 `Mach-O 64-bit executable x86_64`
+- Intel App 内后端依赖不高于 macOS 12.0
 - 两个 DMG 都校验有效
 
 ## 常见问题
