@@ -9,6 +9,7 @@ import re
 import json
 import threading
 import uuid
+import traceback
 from datetime import datetime
 from typing import Optional
 import pandas as pd
@@ -298,6 +299,11 @@ def _write_tagging_tasks(tasks: list[dict]) -> None:
     )
 
 
+def _public_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    return message or exc.__class__.__name__
+
+
 def _save_tagging_task(task: dict) -> None:
     tasks = _read_tagging_tasks()
     for idx, existing in enumerate(tasks):
@@ -543,6 +549,9 @@ def _run_tagging_task(task_id: str) -> None:
 
         batch_dir = OUTPUT_DIR / "tagging_batches"
         batch_files = sorted(batch_dir.glob("batch_*.txt"))
+        if not batch_files:
+            raise RuntimeError("没有找到待打标 batch，请先执行一键分析")
+
         pending_files = [p for p in batch_files if not p.with_name(f"{p.stem}_result.json").exists()]
         task.update({
             "status": "running",
@@ -550,8 +559,20 @@ def _run_tagging_task(task_id: str) -> None:
             "total_batches": len(batch_files),
             "completed_batches": len(batch_files) - len(pending_files),
             "failed_batches": 0,
+            "errors": [],
         })
         _save_tagging_task(task)
+
+        if not pending_files:
+            applied = _apply_tagging_results_to_csv()
+            task.update({
+                "status": "completed",
+                "finished_at": _now_iso(),
+                "applied_records": applied,
+                "message": f"所有 batch 已有结果，已应用 {applied} 条打标结果",
+            })
+            _save_tagging_task(task)
+            return
 
         client = Anthropic(api_key=profile["api_key"], base_url=profile["base_url"])
         system_prompt = "你是严格遵循格式的财务分类专家。请只输出合法的 JSON 数组，不要夹杂任何 Markdown 标记、思考过程或其他废话。返回的必须是可直接解析的 JSON 字符串。"
@@ -583,21 +604,35 @@ def _run_tagging_task(task_id: str) -> None:
                 task["completed_batches"] = int(task.get("completed_batches", 0)) + 1
             except Exception as exc:
                 task["failed_batches"] = int(task.get("failed_batches", 0)) + 1
-                task["message"] = f"{batch_file.name}: {exc}"
+                error_message = f"{batch_file.name}: {_public_error(exc)}"
+                task["message"] = error_message
+                task.setdefault("errors", []).append(error_message)
+                task["errors"] = task["errors"][-5:]
             _save_tagging_task(task)
 
         applied = _apply_tagging_results_to_csv()
-        task.update({
-            "status": "completed" if int(task.get("failed_batches", 0)) == 0 else "failed",
-            "finished_at": _now_iso(),
-            "applied_records": applied,
-            "message": f"已应用 {applied} 条打标结果",
-        })
+        failed_batches = int(task.get("failed_batches", 0))
+        if failed_batches:
+            errors = task.get("errors", [])
+            task.update({
+                "status": "failed",
+                "finished_at": _now_iso(),
+                "applied_records": applied,
+                "message": errors[-1] if errors else f"{failed_batches} 个 batch 打标失败",
+            })
+        else:
+            task.update({
+                "status": "completed",
+                "finished_at": _now_iso(),
+                "applied_records": applied,
+                "message": f"已应用 {applied} 条打标结果",
+            })
     except Exception as exc:
+        traceback.print_exc()
         task.update({
             "status": "failed",
             "finished_at": _now_iso(),
-            "message": str(exc),
+            "message": _public_error(exc),
         })
     _save_tagging_task(task)
 
@@ -635,9 +670,10 @@ def apply_tagging():
         _save_tagging_task(task)
         return jsonify({"success": True, "applied_records": applied, "task": task})
     except Exception as exc:
-        task.update({"status": "failed", "finished_at": _now_iso(), "message": str(exc)})
+        traceback.print_exc()
+        task.update({"status": "failed", "finished_at": _now_iso(), "message": _public_error(exc)})
         _save_tagging_task(task)
-        return jsonify({"error": str(exc), "task": task}), 500
+        return jsonify({"error": _public_error(exc), "task": task}), 500
 
 
 @app.route("/api/tagging/run", methods=["POST"])
@@ -647,6 +683,11 @@ def run_tagging():
         return jsonify({"error": "已有打标任务正在运行", "task": latest}), 409
 
     profile = _active_model_profile()
+    if not _has_real_api_key(profile.get("api_key", "")):
+        return jsonify({"error": "当前模型配置没有可用 API Key，请先在模型配置里保存 API Key"}), 400
+    if not profile.get("base_url") or not profile.get("model"):
+        return jsonify({"error": "当前模型配置缺少 Base URL 或模型名称"}), 400
+
     task = {
         "id": f"tag-{uuid.uuid4().hex[:10]}",
         "type": "llm_tagging",
@@ -710,21 +751,25 @@ def uploads():
 @app.route("/api/process", methods=["POST"])
 def process_data():
     global _df
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
-    record_counts = _tagging_record_counts_from_df(_df)
-    batch_counts = _tagging_batch_counts()
-    return jsonify({
-        "success": True,
-        "has_data": not _df.empty,
-        "total_records": int(len(_df)),
-        "consumption_records": record_counts["consumption"],
-        "pending_tagging_records": record_counts["pending_l2"],
-        "tagged_records": record_counts["tagged_l2"],
-        "tagging_batches": batch_counts,
-        "users": sorted([u for u in _df["user_id"].unique().tolist() if u]),
-    })
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
+        record_counts = _tagging_record_counts_from_df(_df)
+        batch_counts = _tagging_batch_counts()
+        return jsonify({
+            "success": True,
+            "has_data": not _df.empty,
+            "total_records": int(len(_df)),
+            "consumption_records": record_counts["consumption"],
+            "pending_tagging_records": record_counts["pending_l2"],
+            "tagged_records": record_counts["tagged_l2"],
+            "tagging_batches": batch_counts,
+            "users": sorted([u for u in _df["user_id"].unique().tolist() if u]),
+        })
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"error": _public_error(exc)}), 500
 
 
 @app.route("/api/meta")

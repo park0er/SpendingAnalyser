@@ -1,5 +1,11 @@
 const API_BASE = '/api';
 
+async function parseResponse(res) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `API error: ${res.status}`);
+    return data;
+}
+
 export async function fetchJSON(endpoint, params = {}) {
     let url = `${API_BASE}${endpoint}`;
     const searchParams = new URLSearchParams();
@@ -9,8 +15,7 @@ export async function fetchJSON(endpoint, params = {}) {
     const qs = searchParams.toString();
     if (qs) url += '?' + qs;
     const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+    return parseResponse(res);
 }
 
 export async function putJSON(endpoint, body) {
@@ -21,8 +26,7 @@ export async function putJSON(endpoint, body) {
         },
         body: JSON.stringify(body)
     });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+    return parseResponse(res);
 }
 
 export async function postJSON(endpoint, body = {}) {
@@ -33,8 +37,7 @@ export async function postJSON(endpoint, body = {}) {
         },
         body: JSON.stringify(body)
     });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+    return parseResponse(res);
 }
 
 export async function uploadFiles(platform, user, files) {

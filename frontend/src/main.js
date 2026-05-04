@@ -381,7 +381,7 @@ function setupDesktopWorkbench() {
             await loadTaggingStatus();
             await reloadDashboard();
         } catch (err) {
-            setStatus('process-status', '分析失败', 'warn');
+            setStatus('process-status', err.message || '分析失败', 'warn');
         } finally {
             btn.disabled = false;
         }
@@ -409,7 +409,7 @@ function setupDesktopWorkbench() {
             await loadTaggingStatus();
             await reloadDashboard();
         } catch (err) {
-            setStatus('process-status', '应用结果失败', 'warn');
+            setStatus('process-status', err.message || '应用结果失败', 'warn');
         }
     });
 }
