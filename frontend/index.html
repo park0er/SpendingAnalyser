@@ -205,7 +205,28 @@
                 <p id="process-status">等待处理</p>
               </div>
             </div>
-            <button class="btn-run" id="btn-process">一键分析</button>
+            <div class="process-actions">
+              <button class="btn-run" id="btn-process">一键分析</button>
+              <button class="btn-secondary" id="btn-run-tagging">开始 LLM 打标</button>
+              <button class="btn-secondary" id="btn-apply-tagging">应用已有结果</button>
+            </div>
+            <div class="tagging-panel">
+              <div class="tagging-stats">
+                <div>
+                  <span>待打标</span>
+                  <strong id="tagging-pending-records">--</strong>
+                </div>
+                <div>
+                  <span>已打标</span>
+                  <strong id="tagging-tagged-records">--</strong>
+                </div>
+                <div>
+                  <span>Batch 进度</span>
+                  <strong id="tagging-batch-progress">--</strong>
+                </div>
+              </div>
+              <div class="task-list" id="tagging-task-list"></div>
+            </div>
           </div>
         </section>
 
@@ -218,9 +239,12 @@
               </div>
             </div>
             <div class="model-grid">
+              <select id="model-profile-select"></select>
+              <input type="text" id="model-profile-name" placeholder="配置名称，例如：Mify 主模型" />
               <input type="password" id="llm-api-key" placeholder="API Key" autocomplete="off" />
               <input type="text" id="llm-base-url" placeholder="Base URL" />
               <input type="text" id="llm-model" placeholder="模型名称" />
+              <button class="btn-secondary" id="btn-activate-profile">切换</button>
               <button class="btn-secondary" id="btn-save-config">保存配置</button>
             </div>
           </div>

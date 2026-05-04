@@ -241,11 +241,12 @@ body {
 }
 
 .model-grid {
-  grid-template-columns: minmax(140px, 1fr) minmax(170px, 1.3fr) minmax(120px, 0.9fr) 84px;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr);
 }
 
 .upload-controls input,
 .upload-controls select,
+.model-grid select,
 .model-grid input {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -260,6 +261,7 @@ body {
 
 .upload-controls input:focus,
 .upload-controls select:focus,
+.model-grid select:focus,
 .model-grid input:focus {
   border-color: var(--accent-blue);
 }
@@ -317,7 +319,7 @@ body {
 
 .btn-run {
   width: 100%;
-  min-height: 72px;
+  min-height: 56px;
   font-size: 18px;
 }
 
@@ -333,6 +335,94 @@ body {
 .btn-run:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+
+.process-actions {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 10px;
+}
+
+.process-actions .btn-secondary {
+  min-height: 56px;
+}
+
+.tagging-panel {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.tagging-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tagging-stats div {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.tagging-stats span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.tagging-stats strong {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.task-completed {
+  border-left-color: var(--accent-green);
+}
+
+.task-running,
+.task-queued {
+  border-left-color: var(--accent-blue);
+}
+
+.task-failed {
+  border-left-color: var(--accent-red);
+}
+
+.task-item > div:first-child,
+.task-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-item strong {
+  font-size: 13px;
+}
+
+.task-item span,
+.task-item p {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-item p {
+  margin-top: 6px;
 }
 
 .uploaded-list {

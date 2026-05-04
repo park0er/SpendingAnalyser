@@ -6,6 +6,11 @@ Serves processed spending data to the frontend.
 
 import os
 import re
+import json
+import threading
+import uuid
+from datetime import datetime
+from typing import Optional
 import pandas as pd
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -14,6 +19,7 @@ from werkzeug.utils import secure_filename
 
 from .main import run_pipeline
 from .parsers.base import create_empty_uul
+from .classifiers.llm_tagger import apply_tagging_results, export_tag_overrides
 from .classifiers.taxonomy import TAXONOMY
 
 
@@ -32,6 +38,8 @@ _df = None
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "output"))
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.env"))
+MODEL_PROFILES_PATH = CONFIG_PATH.with_name("model_profiles.json")
+TAGGING_TASKS_PATH = OUTPUT_DIR / "tagging_tasks.json"
 
 PLATFORM_LABELS = {
     "alipay": "支付宝",
@@ -204,11 +212,151 @@ def _write_config(config: dict) -> None:
     )
 
 
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def _has_real_api_key(value: str) -> bool:
     if not value:
         return False
     lowered = value.lower()
     return not any(token in lowered for token in ["your_key", "api密钥", "在此填写"])
+
+
+def _profile_public(profile: dict) -> dict:
+    return {
+        "id": profile.get("id", ""),
+        "name": profile.get("name", ""),
+        "base_url": profile.get("base_url", ""),
+        "model": profile.get("model", ""),
+        "api_key_configured": _has_real_api_key(profile.get("api_key", "")),
+    }
+
+
+def _read_model_profiles(include_default: bool = True) -> dict:
+    if MODEL_PROFILES_PATH.exists():
+        data = json.loads(MODEL_PROFILES_PATH.read_text(encoding="utf-8"))
+    else:
+        data = {"active_id": "", "profiles": []}
+
+    profiles = data.get("profiles", [])
+    if include_default and not profiles:
+        current = _read_config()
+        default_profile = {
+            "id": "default",
+            "name": current.get("LLM_MODEL", "默认模型") or "默认模型",
+            "api_key": current.get("LLM_API_KEY", ""),
+            "base_url": current.get("LLM_BASE_URL", ""),
+            "model": current.get("LLM_MODEL", ""),
+        }
+        profiles = [default_profile]
+        data = {"active_id": "default", "profiles": profiles}
+    return data
+
+
+def _write_model_profiles(data: dict) -> None:
+    MODEL_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MODEL_PROFILES_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _active_model_profile() -> dict:
+    data = _read_model_profiles()
+    active_id = data.get("active_id")
+    profiles = data.get("profiles", [])
+    for profile in profiles:
+        if profile.get("id") == active_id:
+            return profile
+    return profiles[0] if profiles else {}
+
+
+def _activate_model_profile(profile: dict) -> None:
+    _write_config({
+        "LLM_API_KEY": profile.get("api_key", ""),
+        "LLM_BASE_URL": profile.get("base_url", ""),
+        "LLM_MODEL": profile.get("model", ""),
+    })
+
+
+def _read_tagging_tasks() -> list[dict]:
+    if not TAGGING_TASKS_PATH.exists():
+        return []
+    try:
+        data = json.loads(TAGGING_TASKS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _write_tagging_tasks(tasks: list[dict]) -> None:
+    TAGGING_TASKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TAGGING_TASKS_PATH.write_text(
+        json.dumps(tasks[-50:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _save_tagging_task(task: dict) -> None:
+    tasks = _read_tagging_tasks()
+    for idx, existing in enumerate(tasks):
+        if existing.get("id") == task.get("id"):
+            tasks[idx] = task
+            break
+    else:
+        tasks.append(task)
+    _write_tagging_tasks(tasks)
+
+
+def _latest_task() -> Optional[dict]:
+    tasks = _read_tagging_tasks()
+    return tasks[-1] if tasks else None
+
+
+def _tagging_batch_counts() -> dict:
+    batch_dir = OUTPUT_DIR / "tagging_batches"
+    batch_files = sorted(batch_dir.glob("batch_*.txt")) if batch_dir.exists() else []
+    result_files = sorted(batch_dir.glob("batch_*_result.json")) if batch_dir.exists() else []
+    return {
+        "total": len(batch_files),
+        "completed": len(result_files),
+        "pending": max(len(batch_files) - len(result_files), 0),
+    }
+
+
+def _tagging_record_counts() -> dict:
+    csv_path = OUTPUT_DIR / "processed_data.csv"
+    if not csv_path.exists():
+        return {"total": 0, "consumption": 0, "tagged_l1": 0, "tagged_l2": 0, "pending_l2": 0}
+
+    df = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
+    cons = _consumption_df(df)
+    l1 = cons["global_category_l1"].fillna("").astype(str).str.strip()
+    l2 = cons["global_category_l2"].fillna("").astype(str).str.strip()
+    return {
+        "total": int(len(df)),
+        "consumption": int(len(cons)),
+        "tagged_l1": int((l1 != "").sum()),
+        "tagged_l2": int((l2 != "").sum()),
+        "pending_l2": int((l2 == "").sum()),
+    }
+
+
+def _apply_tagging_results_to_csv() -> int:
+    global _df
+    csv_path = OUTPUT_DIR / "processed_data.csv"
+    if not csv_path.exists():
+        return 0
+
+    before = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
+    before_tagged = int((before["global_category_l2"].fillna("").astype(str).str.strip() != "").sum())
+    after = _normalise_df(apply_tagging_results(before, str(OUTPUT_DIR / "tagging_batches")))
+    after_tagged = int((after["global_category_l2"].fillna("").astype(str).str.strip() != "").sum())
+    after.to_csv(str(csv_path), index=False, encoding="utf-8-sig")
+    export_tag_overrides(after, str(OUTPUT_DIR / "tag_overrides.csv"))
+    _df = after
+    return max(after_tagged - before_tagged, 0)
 
 
 def _safe_upload_name(platform: str, original_name: str) -> str:
@@ -300,6 +448,197 @@ def config():
         "base_url": current.get("LLM_BASE_URL", ""),
         "model": current.get("LLM_MODEL", ""),
     })
+
+
+@app.route("/api/model-profiles", methods=["GET", "POST"])
+def model_profiles():
+    data = _read_model_profiles()
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        profile_id = payload.get("id") or f"profile-{uuid.uuid4().hex[:10]}"
+        profiles = data.get("profiles", [])
+        existing = next((p for p in profiles if p.get("id") == profile_id), None)
+        profile = existing or {"id": profile_id}
+
+        profile["name"] = (payload.get("name") or profile.get("name") or payload.get("model") or "未命名模型").strip()
+        profile["base_url"] = (payload.get("base_url") or profile.get("base_url") or "").strip()
+        profile["model"] = (payload.get("model") or profile.get("model") or "").strip()
+        if payload.get("api_key"):
+            profile["api_key"] = payload.get("api_key").strip()
+        else:
+            profile["api_key"] = profile.get("api_key", "")
+
+        if not profile["base_url"] or not profile["model"]:
+            return jsonify({"error": "请填写 Base URL 和模型名称"}), 400
+
+        if existing is None:
+            profiles.append(profile)
+        data["profiles"] = profiles
+
+        if payload.get("make_active", True):
+            data["active_id"] = profile_id
+            _activate_model_profile(profile)
+
+        _write_model_profiles(data)
+        return jsonify({
+            "active_id": data.get("active_id", ""),
+            "profile": _profile_public(profile),
+            "profiles": [_profile_public(p) for p in profiles],
+        })
+
+    return jsonify({
+        "active_id": data.get("active_id", ""),
+        "profiles": [_profile_public(p) for p in data.get("profiles", [])],
+    })
+
+
+@app.route("/api/model-profiles/active", methods=["POST"])
+def active_model_profile():
+    payload = request.get_json(silent=True) or {}
+    profile_id = payload.get("id", "")
+    data = _read_model_profiles()
+    for profile in data.get("profiles", []):
+        if profile.get("id") == profile_id:
+            data["active_id"] = profile_id
+            _write_model_profiles(data)
+            _activate_model_profile(profile)
+            return jsonify({"active_id": profile_id, "profile": _profile_public(profile)})
+    return jsonify({"error": "模型配置不存在"}), 404
+
+
+def _run_tagging_task(task_id: str) -> None:
+    task = next((t for t in _read_tagging_tasks() if t.get("id") == task_id), None)
+    if not task:
+        return
+
+    try:
+        profile = _active_model_profile()
+        if not _has_real_api_key(profile.get("api_key", "")):
+            raise RuntimeError("当前模型配置没有可用 API Key")
+
+        from anthropic import Anthropic
+
+        batch_dir = OUTPUT_DIR / "tagging_batches"
+        batch_files = sorted(batch_dir.glob("batch_*.txt"))
+        pending_files = [p for p in batch_files if not p.with_name(f"{p.stem}_result.json").exists()]
+        task.update({
+            "status": "running",
+            "message": "正在调用 LLM 打标",
+            "total_batches": len(batch_files),
+            "completed_batches": len(batch_files) - len(pending_files),
+            "failed_batches": 0,
+        })
+        _save_tagging_task(task)
+
+        client = Anthropic(api_key=profile["api_key"], base_url=profile["base_url"])
+        system_prompt = "你是严格遵循格式的财务分类专家。请只输出合法的 JSON 数组，不要夹杂任何 Markdown 标记、思考过程或其他废话。返回的必须是可直接解析的 JSON 字符串。"
+
+        for batch_file in pending_files:
+            try:
+                response = client.messages.create(
+                    model=profile["model"],
+                    max_tokens=2000,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": batch_file.read_text(encoding="utf-8")}],
+                )
+                output_text = ""
+                for block in response.content:
+                    if block.type == "text":
+                        output_text += block.text
+                output_text = output_text.strip()
+                if output_text.startswith("```json"):
+                    output_text = output_text[7:]
+                if output_text.startswith("```"):
+                    output_text = output_text[3:]
+                if output_text.endswith("```"):
+                    output_text = output_text[:-3]
+                result_json = json.loads(output_text.strip())
+                batch_file.with_name(f"{batch_file.stem}_result.json").write_text(
+                    json.dumps(result_json, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                task["completed_batches"] = int(task.get("completed_batches", 0)) + 1
+            except Exception as exc:
+                task["failed_batches"] = int(task.get("failed_batches", 0)) + 1
+                task["message"] = f"{batch_file.name}: {exc}"
+            _save_tagging_task(task)
+
+        applied = _apply_tagging_results_to_csv()
+        task.update({
+            "status": "completed" if int(task.get("failed_batches", 0)) == 0 else "failed",
+            "finished_at": _now_iso(),
+            "applied_records": applied,
+            "message": f"已应用 {applied} 条打标结果",
+        })
+    except Exception as exc:
+        task.update({
+            "status": "failed",
+            "finished_at": _now_iso(),
+            "message": str(exc),
+        })
+    _save_tagging_task(task)
+
+
+@app.route("/api/tagging/status")
+def tagging_status():
+    tasks = _read_tagging_tasks()
+    return jsonify({
+        "batches": _tagging_batch_counts(),
+        "records": _tagging_record_counts(),
+        "tasks": list(reversed(tasks[-10:])),
+        "latest_task": _latest_task(),
+    })
+
+
+@app.route("/api/tagging/apply", methods=["POST"])
+def apply_tagging():
+    task = {
+        "id": f"apply-{uuid.uuid4().hex[:10]}",
+        "type": "apply_results",
+        "status": "running",
+        "started_at": _now_iso(),
+        "message": "正在应用已有打标结果",
+        **_tagging_batch_counts(),
+    }
+    _save_tagging_task(task)
+    try:
+        applied = _apply_tagging_results_to_csv()
+        task.update({
+            "status": "completed",
+            "finished_at": _now_iso(),
+            "applied_records": applied,
+            "message": f"已应用 {applied} 条打标结果",
+        })
+        _save_tagging_task(task)
+        return jsonify({"success": True, "applied_records": applied, "task": task})
+    except Exception as exc:
+        task.update({"status": "failed", "finished_at": _now_iso(), "message": str(exc)})
+        _save_tagging_task(task)
+        return jsonify({"error": str(exc), "task": task}), 500
+
+
+@app.route("/api/tagging/run", methods=["POST"])
+def run_tagging():
+    latest = _latest_task()
+    if latest and latest.get("status") == "running":
+        return jsonify({"error": "已有打标任务正在运行", "task": latest}), 409
+
+    profile = _active_model_profile()
+    task = {
+        "id": f"tag-{uuid.uuid4().hex[:10]}",
+        "type": "llm_tagging",
+        "status": "queued",
+        "started_at": _now_iso(),
+        "model": profile.get("model", ""),
+        "profile_name": profile.get("name", ""),
+        "message": "等待开始",
+        **_tagging_batch_counts(),
+    }
+    _save_tagging_task(task)
+    thread = threading.Thread(target=_run_tagging_task, args=(task["id"],), daemon=True)
+    thread.start()
+    return jsonify({"success": True, "task": task})
 
 
 @app.route("/api/uploads", methods=["GET", "POST"])

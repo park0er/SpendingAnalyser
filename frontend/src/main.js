@@ -27,6 +27,8 @@ let selectedL2s = [];
 
 // Sort state
 let currentSort = { column: 'timestamp', order: 'desc' };
+let modelProfilesState = { active_id: '', profiles: [] };
+let taggingPollTimer = null;
 
 function setStatus(id, text, tone = '') {
     const el = document.getElementById(id);
@@ -101,15 +103,20 @@ function formatFileSize(bytes) {
 }
 
 async function loadDesktopState() {
-    const [config, uploads] = await Promise.all([
+    const [config, uploads, profiles, tagging] = await Promise.all([
         api.config(),
         api.uploads(),
+        api.modelProfiles(),
+        api.taggingStatus(),
     ]);
 
     const savedUser = window.localStorage.getItem('spending-analyser-upload-user');
     if (savedUser) document.getElementById('upload-user').value = savedUser;
     document.getElementById('llm-base-url').value = config.base_url || '';
     document.getElementById('llm-model').value = config.model || '';
+    modelProfilesState = profiles || { active_id: '', profiles: [] };
+    renderModelProfiles();
+    renderTaggingStatus(tagging);
     setStatus('model-status', config.api_key_configured ? '已保存' : '未配置', config.api_key_configured ? 'ok' : 'muted');
     renderUploads(uploads.files || []);
 }
@@ -137,6 +144,75 @@ function renderUploads(files) {
         `;
         list.appendChild(row);
     });
+}
+
+function renderModelProfiles() {
+    const select = document.getElementById('model-profile-select');
+    if (!select) return;
+    select.innerHTML = '';
+    (modelProfilesState.profiles || []).forEach(profile => {
+        const opt = document.createElement('option');
+        opt.value = profile.id;
+        opt.textContent = `${profile.name || profile.model}${profile.api_key_configured ? '' : '（未填 Key）'}`;
+        select.appendChild(opt);
+    });
+    select.value = modelProfilesState.active_id || '';
+
+    const active = (modelProfilesState.profiles || []).find(p => p.id === select.value);
+    if (active) {
+        document.getElementById('model-profile-name').value = active.name || '';
+        document.getElementById('llm-base-url').value = active.base_url || '';
+        document.getElementById('llm-model').value = active.model || '';
+    }
+}
+
+function renderTaggingStatus(status) {
+    if (!status) return;
+    const records = status.records || {};
+    const batches = status.batches || {};
+    document.getElementById('tagging-pending-records').textContent = records.pending_l2 ?? '--';
+    document.getElementById('tagging-tagged-records').textContent = records.tagged_l2 ?? '--';
+    document.getElementById('tagging-batch-progress').textContent =
+        batches.total ? `${batches.completed || 0}/${batches.total}` : '无任务';
+
+    const list = document.getElementById('tagging-task-list');
+    const tasks = status.tasks || [];
+    if (!tasks.length) {
+        list.innerHTML = '<div class="empty-upload">暂无打标任务记录</div>';
+    } else {
+        list.innerHTML = tasks.map(task => `
+            <div class="task-item task-${task.status || 'unknown'}">
+                <div>
+                    <strong>${task.type === 'apply_results' ? '应用结果' : 'LLM 打标'}</strong>
+                    <span>${task.model || task.profile_name || ''}</span>
+                </div>
+                <div class="task-meta">
+                    <span>${task.status || 'unknown'}</span>
+                    <span>${task.completed_batches ?? task.completed ?? 0}/${task.total_batches ?? task.total ?? 0}</span>
+                    <span>${task.finished_at || task.started_at || ''}</span>
+                </div>
+                <p>${task.message || ''}</p>
+            </div>
+        `).join('');
+    }
+
+    const latest = status.latest_task;
+    if (latest?.status === 'running' || latest?.status === 'queued') {
+        if (!taggingPollTimer) {
+            taggingPollTimer = setInterval(loadTaggingStatus, 2000);
+        }
+    } else if (taggingPollTimer) {
+        clearInterval(taggingPollTimer);
+        taggingPollTimer = null;
+    }
+}
+
+async function loadTaggingStatus() {
+    try {
+        renderTaggingStatus(await api.taggingStatus());
+    } catch (err) {
+        setStatus('process-status', '读取打标状态失败', 'warn');
+    }
 }
 
 function setupDesktopWorkbench() {
@@ -179,15 +255,33 @@ function setupDesktopWorkbench() {
     document.getElementById('btn-save-config').addEventListener('click', async () => {
         try {
             setStatus('model-status', '保存中...', 'muted');
-            await api.saveConfig({
+            await api.saveModelProfile({
+                id: document.getElementById('model-profile-select').value || undefined,
+                name: document.getElementById('model-profile-name').value,
                 api_key: document.getElementById('llm-api-key').value,
                 base_url: document.getElementById('llm-base-url').value,
                 model: document.getElementById('llm-model').value,
+                make_active: true,
             });
             document.getElementById('llm-api-key').value = '';
             await loadDesktopState();
         } catch (err) {
             setStatus('model-status', '保存失败', 'warn');
+        }
+    });
+
+    document.getElementById('model-profile-select').addEventListener('change', renderModelProfiles);
+
+    document.getElementById('btn-activate-profile').addEventListener('click', async () => {
+        const id = document.getElementById('model-profile-select').value;
+        if (!id) return;
+        try {
+            setStatus('model-status', '切换中...', 'muted');
+            await api.activateModelProfile(id);
+            await loadDesktopState();
+            setStatus('model-status', '已切换', 'ok');
+        } catch (err) {
+            setStatus('model-status', '切换失败', 'warn');
         }
     });
 
@@ -201,12 +295,39 @@ function setupDesktopWorkbench() {
                 setStatus('process-status', '还没有可解析账单', 'warn');
                 return;
             }
-            setStatus('process-status', `${result.total_records} 条记录`, 'ok');
+            setStatus('process-status', `${result.total_records} 条记录，已生成待打标任务`, 'ok');
+            await loadTaggingStatus();
             await reloadDashboard();
         } catch (err) {
             setStatus('process-status', '分析失败', 'warn');
         } finally {
             btn.disabled = false;
+        }
+    });
+
+    document.getElementById('btn-run-tagging').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-run-tagging');
+        try {
+            btn.disabled = true;
+            setStatus('process-status', 'LLM 打标已开始', 'muted');
+            await api.runTagging();
+            await loadTaggingStatus();
+        } catch (err) {
+            setStatus('process-status', err.message || '启动打标失败', 'warn');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    document.getElementById('btn-apply-tagging').addEventListener('click', async () => {
+        try {
+            setStatus('process-status', '正在应用已有结果...', 'muted');
+            const result = await api.applyTagging();
+            setStatus('process-status', `已应用 ${result.applied_records || 0} 条结果`, 'ok');
+            await loadTaggingStatus();
+            await reloadDashboard();
+        } catch (err) {
+            setStatus('process-status', '应用结果失败', 'warn');
         }
     });
 }
@@ -1021,7 +1142,8 @@ async function refreshAll() {
 }
 
 async function reloadDashboard() {
-    window.location.reload();
+    await loadMeta();
+    await refreshAll();
 }
 
 // ── Event Listeners ──────────────────────────────────────────

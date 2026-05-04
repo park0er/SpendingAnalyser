@@ -1,5 +1,10 @@
 import importlib
 import io
+import json
+
+import pandas as pd
+
+from src.parsers.base import create_empty_uul
 
 
 def make_client(tmp_path, monkeypatch):
@@ -132,3 +137,120 @@ def test_uploaded_users_are_available_before_processing(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert meta.status_code == 200
     assert meta.get_json()["users"] == [{"id": "老婆", "label": "老婆"}]
+
+
+def _write_processed_fixture(api_module, rows):
+    df = create_empty_uul()
+    for row in rows:
+        df.loc[len(df)] = {
+            "source_platform": row.get("source_platform", "alipay"),
+            "user_id": row.get("user_id", "我"),
+            "transaction_id": row["transaction_id"],
+            "timestamp": row.get("timestamp", "2026-01-01 10:00:00"),
+            "direction": row.get("direction", "支出"),
+            "amount": row.get("amount", 10.0),
+            "counterparty": row.get("counterparty", "商户"),
+            "description": row.get("description", "商品"),
+            "payment_method": "",
+            "status": "交易成功",
+            "platform_category": "",
+            "platform_tx_type": "",
+            "original_tx_id": "",
+            "merchant_order_id": "",
+            "note": "",
+            "track": row.get("track", "consumption"),
+            "is_refunded": False,
+            "refund_amount": 0.0,
+            "effective_amount": row.get("effective_amount", row.get("amount", 10.0)),
+            "is_ignored": False,
+            "global_category_l1": row.get("global_category_l1", ""),
+            "global_category_l2": row.get("global_category_l2", ""),
+        }
+    api_module.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+
+
+def test_apply_existing_tagging_results_updates_dashboard_data(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+
+    batch_dir = api_module.OUTPUT_DIR / "tagging_batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "manifest.json").write_text(
+        json.dumps([{"file": str(batch_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
+        encoding="utf-8",
+    )
+    (batch_dir / "batch_000_result.json").write_text(
+        json.dumps([{"index": 1, "l1": "餐饮美食", "l2": "堂食正餐"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    response = client.post("/api/tagging/apply")
+    tx = client.get("/api/transactions").get_json()["records"][0]
+
+    assert response.status_code == 200
+    assert response.get_json()["applied_records"] == 1
+    assert tx["category_l1"] == "餐饮美食"
+    assert tx["category_l2"] == "堂食正餐"
+
+
+def test_tagging_status_reports_batches_and_task_history(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+
+    batch_dir = api_module.OUTPUT_DIR / "tagging_batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
+    (batch_dir / "batch_001.txt").write_text("prompt", encoding="utf-8")
+    (batch_dir / "batch_000_result.json").write_text("[]", encoding="utf-8")
+    (api_module.OUTPUT_DIR / "tagging_tasks.json").write_text(
+        json.dumps([{"id": "task-1", "status": "completed", "completed_batches": 1, "total_batches": 2}]),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/tagging/status")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["batches"]["total"] == 2
+    assert payload["batches"]["completed"] == 1
+    assert payload["batches"]["pending"] == 1
+    assert payload["tasks"][0]["id"] == "task-1"
+
+
+def test_model_profiles_can_be_saved_and_switched_without_exposing_keys(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+
+    first = client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Mimo",
+            "api_key": "sk-mimo-secret",
+            "base_url": "https://mimo.example/anthropic",
+            "model": "mimo-model",
+            "make_active": True,
+        },
+    )
+    second = client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Backup",
+            "api_key": "sk-backup-secret",
+            "base_url": "https://backup.example/anthropic",
+            "model": "backup-model",
+            "make_active": False,
+        },
+    )
+    second_id = second.get_json()["profile"]["id"]
+    switched = client.post("/api/model-profiles/active", json={"id": second_id})
+    profiles = client.get("/api/model-profiles")
+    config = client.get("/api/config")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert switched.status_code == 200
+    assert profiles.get_json()["active_id"] == second_id
+    assert "sk-backup-secret" not in profiles.get_data(as_text=True)
+    assert config.get_json()["base_url"] == "https://backup.example/anthropic"
+    assert config.get_json()["model"] == "backup-model"
+    assert "sk-backup-secret" in api_module.CONFIG_PATH.read_text(encoding="utf-8")

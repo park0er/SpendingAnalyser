@@ -1,11 +1,11 @@
 """
 LLM Tagger Runner — Provider-agnostic batch tagging
 
-Reads batch prompts from `output/tagging_batches/*.txt` and calls an
+Reads batch prompts from `OUTPUT_DIR/tagging_batches/*.txt` and calls an
 LLM API (Anthropic SDK format) to get JSON classification results.
 Supports any provider with Anthropic-compatible endpoint (MiMo, MiniMax, etc.)
 
-Configuration is read from `config.env` in the project root:
+Configuration is read from `CONFIG_PATH` or `config.env` in the project root:
   LLM_API_KEY=your_key
   LLM_BASE_URL=https://api.xiaomimimo.com/anthropic
   LLM_MODEL=mimo-v2.5-pro
@@ -25,7 +25,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 def load_config():
     """Load LLM configuration from config.env file."""
     config = {}
-    config_path = Path(__file__).resolve().parent.parent.parent / "config.env"
+    if os.environ.get("CONFIG_PATH"):
+        config_path = Path(os.environ["CONFIG_PATH"]).expanduser()
+    else:
+        config_path = Path(__file__).resolve().parent.parent.parent / "config.env"
 
     if not config_path.exists():
         # Try current working directory
@@ -133,9 +136,11 @@ def process_batch(txt_file: str) -> None:
 
 
 def main():
-    batch_files = sorted(glob.glob("output/tagging_batches/batch_*.txt"))
+    output_dir = Path(os.environ.get("OUTPUT_DIR", "output"))
+    batch_dir = output_dir / "tagging_batches"
+    batch_files = sorted(glob.glob(str(batch_dir / "batch_*.txt")))
     if not batch_files:
-        print("❌ 未找到 batch 文件 (output/tagging_batches/)")
+        print(f"❌ 未找到 batch 文件 ({batch_dir}/)")
         return
 
     # Count how many need processing
@@ -160,10 +165,10 @@ def main():
     from src.classifiers.llm_tagger import apply_tagging_results
     import pandas as pd
 
-    df_path = "output/processed_data.csv"
+    df_path = output_dir / "processed_data.csv"
     if os.path.exists(df_path):
         df = pd.read_csv(df_path)
-        df = apply_tagging_results(df, "output/tagging_batches")
+        df = apply_tagging_results(df, str(batch_dir))
         df.to_csv(df_path, index=False, encoding="utf-8-sig")
         print("\n🎉 CSV 已更新！重启 Flask 后端即可看到变化。")
     else:
