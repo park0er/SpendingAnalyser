@@ -148,29 +148,73 @@ function renderUploads(files) {
 
 function renderModelProfiles() {
     const select = document.getElementById('model-profile-select');
+    const list = document.getElementById('model-profile-list');
     if (!select) return;
+    const profiles = modelProfilesState.profiles || [];
     select.innerHTML = '';
-    (modelProfilesState.profiles || []).forEach(profile => {
+    if (list) list.innerHTML = '';
+    profiles.forEach(profile => {
         const opt = document.createElement('option');
         opt.value = profile.id;
         opt.textContent = `${profile.name || profile.model}${profile.api_key_configured ? '' : '（未填 Key）'}`;
         select.appendChild(opt);
-    });
-    select.value = modelProfilesState.active_id || '';
 
-    const active = (modelProfilesState.profiles || []).find(p => p.id === select.value);
+        if (list) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'model-profile-option';
+            btn.dataset.profileId = profile.id;
+            const name = document.createElement('span');
+            name.textContent = profile.name || profile.model || '未命名模型';
+            const detail = document.createElement('small');
+            detail.textContent = `${profile.model || '--'}${profile.api_key_configured ? '' : ' · 未填 Key'}`;
+            btn.append(name, detail);
+            btn.addEventListener('click', () => selectModelProfile(profile.id));
+            list.appendChild(btn);
+        }
+    });
+    selectModelProfile(modelProfilesState.active_id || profiles[0]?.id || '', { updateForm: false });
+
+    renderActiveModelSummary();
+    renderSelectedModelProfile(select.value);
+}
+
+function renderActiveModelSummary() {
+    const active = (modelProfilesState.profiles || []).find(p => p.id === modelProfilesState.active_id);
     if (active) {
         document.getElementById('active-model-name').textContent = active.name || active.model || '--';
         document.getElementById('active-model-detail').textContent =
             `${active.model || '--'} · ${active.api_key_configured ? 'Key 已保存' : '未填 Key'}`;
-        document.getElementById('model-profile-name').value = active.name || '';
-        document.getElementById('llm-base-url').value = active.base_url || '';
-        document.getElementById('llm-model').value = active.model || '';
     } else {
         document.getElementById('active-model-name').textContent = '--';
         document.getElementById('active-model-detail').textContent = '--';
     }
 }
+
+function renderSelectedModelProfile(profileId) {
+    const selected = (modelProfilesState.profiles || []).find(p => p.id === profileId);
+    document.getElementById('model-profile-name').value = selected?.name || '';
+    document.getElementById('llm-base-url').value = selected?.base_url || '';
+    document.getElementById('llm-model').value = selected?.model || '';
+    document.getElementById('llm-api-key').value = '';
+}
+
+function selectModelProfile(profileId, options = {}) {
+    const select = document.getElementById('model-profile-select');
+    if (!select) return;
+    select.value = profileId;
+    document.querySelectorAll('.model-profile-option').forEach(btn => {
+        const isSelected = btn.dataset.profileId === profileId;
+        const isActive = btn.dataset.profileId === modelProfilesState.active_id;
+        btn.classList.toggle('selected', isSelected);
+        btn.classList.toggle('active-profile', isActive);
+        btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+    });
+    if (options.updateForm !== false) {
+        renderSelectedModelProfile(profileId);
+    }
+}
+
 
 function renderTaggingStatus(status) {
     if (!status) return;
@@ -300,7 +344,9 @@ function setupDesktopWorkbench() {
         }
     });
 
-    document.getElementById('model-profile-select').addEventListener('change', renderModelProfiles);
+    document.getElementById('model-profile-select').addEventListener('change', (event) => {
+        selectModelProfile(event.target.value);
+    });
 
     document.getElementById('btn-activate-profile').addEventListener('click', async () => {
         const id = document.getElementById('model-profile-select').value;

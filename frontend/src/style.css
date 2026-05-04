@@ -297,6 +297,49 @@ body {
   gap: 8px;
 }
 
+.model-profile-select-hidden {
+  display: none;
+}
+
+.model-profile-list {
+  display: grid;
+  gap: 8px;
+}
+
+.model-profile-option {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-height: 54px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.model-profile-option:hover,
+.model-profile-option.selected {
+  border-color: var(--accent-blue);
+  background: var(--bg-hover);
+}
+
+.model-profile-option.active-profile {
+  border-left: 3px solid var(--accent-green);
+}
+
+.model-profile-option span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.model-profile-option small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .model-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

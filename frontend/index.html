@@ -249,8 +249,9 @@
             </div>
             <div class="model-profile-layout">
               <div class="saved-models">
-                <label for="model-profile-select">已保存配置</label>
-                <select id="model-profile-select"></select>
+                <label>已保存配置</label>
+                <select id="model-profile-select" class="model-profile-select-hidden" aria-hidden="true" tabindex="-1"></select>
+                <div class="model-profile-list" id="model-profile-list"></div>
                 <button class="btn-secondary" id="btn-activate-profile">设为当前</button>
               </div>
               <div class="model-form">
