@@ -139,6 +139,56 @@ def test_uploaded_users_are_available_before_processing(tmp_path, monkeypatch):
     assert meta.get_json()["users"] == [{"id": "老婆", "label": "老婆"}]
 
 
+def test_uploaded_file_can_be_deleted(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    uploaded = client.post(
+        "/api/uploads",
+        data={
+            "platform": "alipay",
+            "user": "我",
+            "files": (io.BytesIO(b"csv-content"), "january.csv"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()["files"][0]
+
+    response = client.delete(f"/api/uploads/{uploaded['relative_path']}")
+    listed = client.get("/api/uploads").get_json()["files"]
+
+    assert response.status_code == 200
+    assert response.get_json()["deleted"] is True
+    assert listed == []
+    assert not (api_module.DATA_DIR / uploaded["relative_path"]).exists()
+
+
+def test_uploaded_file_can_be_moved_to_another_user_and_platform(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    uploaded = client.post(
+        "/api/uploads",
+        data={
+            "platform": "alipay",
+            "user": "我",
+            "files": (io.BytesIO(b"csv-content"), "january.csv"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()["files"][0]
+
+    response = client.patch(
+        f"/api/uploads/{uploaded['relative_path']}",
+        json={"platform": "wechat", "user": "老婆"},
+    )
+    listed = client.get("/api/uploads").get_json()["files"]
+
+    assert response.status_code == 200
+    updated = response.get_json()["file"]
+    assert updated["platform"] == "wechat"
+    assert updated["user"] == "老婆"
+    assert updated["name"].startswith("微信")
+    assert updated["relative_path"].startswith("老婆/")
+    assert (api_module.DATA_DIR / updated["relative_path"]).read_bytes() == b"csv-content"
+    assert not (api_module.DATA_DIR / uploaded["relative_path"]).exists()
+    assert listed == [updated]
+
+
 def _write_processed_fixture(api_module, rows):
     df = create_empty_uul()
     for row in rows:

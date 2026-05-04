@@ -37,6 +37,16 @@ function setStatus(id, text, tone = '') {
     el.className = tone ? `status-${tone}` : '';
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+    }[char]));
+}
+
 function getFilters() {
     const f = {};
     const user = document.getElementById('f-user').value;
@@ -96,6 +106,12 @@ function platformLabel(platform) {
     }[platform] || platform || '未知';
 }
 
+function platformOptions(selected) {
+    return ['alipay', 'wechat', 'jd', 'meituan'].map(platform => (
+        `<option value="${platform}" ${platform === selected ? 'selected' : ''}>${platformLabel(platform)}</option>`
+    )).join('');
+}
+
 function formatFileSize(bytes) {
     if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -133,14 +149,18 @@ function renderUploads(files) {
         return;
     }
 
-    files.slice(-6).reverse().forEach(file => {
+    files.slice().reverse().forEach(file => {
         const row = document.createElement('div');
         row.className = 'uploaded-item';
+        row.dataset.relativePath = file.relative_path || '';
+        const name = escapeHtml(file.name);
         row.innerHTML = `
-            <span class="uploaded-user">${file.user || '未分配'}</span>
-            <span class="uploaded-platform">${platformLabel(file.platform)}</span>
-            <span class="uploaded-name" title="${file.name}">${file.name}</span>
+            <input class="uploaded-user-input" value="${escapeHtml(file.user)}" maxlength="40" aria-label="用户" />
+            <select class="uploaded-platform-select" aria-label="平台">${platformOptions(file.platform)}</select>
+            <span class="uploaded-name" title="${name}">${name}</span>
             <span class="uploaded-size">${formatFileSize(file.size)}</span>
+            <button class="uploaded-action" data-action="save">保存</button>
+            <button class="uploaded-action danger" data-action="delete">删除</button>
         `;
         list.appendChild(row);
     });
@@ -281,6 +301,7 @@ function setupDesktopWorkbench() {
     const fileInput = document.getElementById('bill-files');
     const pickerLabel = document.getElementById('file-picker-label');
     const userInput = document.getElementById('upload-user');
+    const uploadedList = document.getElementById('uploaded-list');
 
     fileInput.addEventListener('change', () => {
         const count = fileInput.files.length;
@@ -311,6 +332,34 @@ function setupDesktopWorkbench() {
             switchView('process');
         } catch (err) {
             setStatus('upload-count', err.message, 'warn');
+        }
+    });
+
+    uploadedList.addEventListener('click', async (event) => {
+        const action = event.target.dataset.action;
+        if (!action) return;
+
+        const row = event.target.closest('.uploaded-item');
+        const relativePath = row?.dataset.relativePath;
+        if (!relativePath) return;
+
+        try {
+            event.target.disabled = true;
+            if (action === 'delete') {
+                await api.deleteUpload(relativePath);
+                setStatus('upload-count', '已删除，重新分析后生效', 'ok');
+            } else if (action === 'save') {
+                const user = row.querySelector('.uploaded-user-input').value.trim();
+                const platform = row.querySelector('.uploaded-platform-select').value;
+                await api.updateUpload(relativePath, { user, platform });
+                setStatus('upload-count', '已保存，重新分析后生效', 'ok');
+            }
+            await loadDesktopState();
+            setStatus('process-status', '上传记录已变更，请重新一键分析', 'warn');
+        } catch (err) {
+            setStatus('upload-count', err.message || '更新上传记录失败', 'warn');
+        } finally {
+            event.target.disabled = false;
         }
     });
 

@@ -6,6 +6,10 @@ async function parseResponse(res) {
     return data;
 }
 
+function uploadPath(relativePath) {
+    return String(relativePath).split('/').map(encodeURIComponent).join('/');
+}
+
 export async function fetchJSON(endpoint, params = {}) {
     let url = `${API_BASE}${endpoint}`;
     const searchParams = new URLSearchParams();
@@ -29,14 +33,19 @@ export async function putJSON(endpoint, body) {
     return parseResponse(res);
 }
 
-export async function postJSON(endpoint, body = {}) {
+export async function postJSON(endpoint, body = {}, method = 'POST') {
     const res = await fetch(`${API_BASE}${endpoint}`, {
-        method: 'POST',
+        method,
         headers: {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify(body)
     });
+    return parseResponse(res);
+}
+
+export async function deleteJSON(endpoint) {
+    const res = await fetch(`${API_BASE}${endpoint}`, { method: 'DELETE' });
     return parseResponse(res);
 }
 
@@ -62,6 +71,8 @@ export const api = {
     activateModelProfile: (id) => postJSON('/model-profiles/active', { id }),
     uploads: () => fetchJSON('/uploads'),
     uploadFiles,
+    updateUpload: (relativePath, payload) => postJSON(`/uploads/${uploadPath(relativePath)}`, payload, 'PATCH'),
+    deleteUpload: (relativePath) => deleteJSON(`/uploads/${uploadPath(relativePath)}`),
     process: () => postJSON('/process'),
     taggingStatus: () => fetchJSON('/tagging/status'),
     runTagging: () => postJSON('/tagging/run'),

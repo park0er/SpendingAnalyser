@@ -397,6 +397,18 @@ def _safe_upload_name(platform: str, original_name: str) -> str:
     return f"{label}_{safe_stem}{ext}"
 
 
+def _rename_upload_for_platform(platform: str, current_name: str) -> str:
+    ext = Path(current_name).suffix
+    stem = Path(current_name).stem
+    label = PLATFORM_LABELS[platform]
+
+    for existing_label in PLATFORM_LABELS.values():
+        if stem.startswith(existing_label):
+            return f"{label}{stem[len(existing_label):]}{ext}"
+
+    return _safe_upload_name(platform, current_name)
+
+
 def _safe_user_id(raw_user: str) -> str:
     user_id = (raw_user or "").strip()
     if not user_id:
@@ -410,6 +422,34 @@ def _safe_user_id(raw_user: str) -> str:
     if len(user_id) > 40:
         raise ValueError("用户名最多 40 个字符")
     return user_id
+
+
+def _resolve_upload_path(relative_path: str) -> Path:
+    raw = (relative_path or "").strip()
+    if not raw:
+        raise ValueError("文件路径为空")
+
+    target = (DATA_DIR / raw).resolve()
+    data_root = DATA_DIR.resolve()
+    try:
+        target.relative_to(data_root)
+    except ValueError as exc:
+        raise ValueError("文件路径不合法") from exc
+
+    if target.suffix.lower() not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError("仅支持管理账单文件")
+    return target
+
+
+def _unique_upload_target(user_id: str, filename: str, current_path: Optional[Path] = None) -> Path:
+    user_dir = DATA_DIR / user_id
+    user_dir.mkdir(parents=True, exist_ok=True)
+    target = user_dir / filename
+    counter = 1
+    while target.exists() and target.resolve() != current_path:
+        target = user_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
+        counter += 1
+    return target
 
 
 def _detect_platform(filename: str) -> str:
@@ -746,6 +786,39 @@ def uploads():
 
     files = [_upload_file_payload(path, user_id) for path, user_id in _iter_upload_files()]
     return jsonify({"files": files})
+
+
+@app.route("/api/uploads/<path:relative_path>", methods=["DELETE", "PATCH"])
+def manage_upload(relative_path):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        source = _resolve_upload_path(relative_path)
+        if not source.exists() or not source.is_file():
+            return jsonify({"error": "上传文件不存在"}), 404
+
+        if request.method == "DELETE":
+            source.unlink()
+            return jsonify({"deleted": True, "relative_path": relative_path})
+
+        payload = request.get_json(silent=True) or {}
+        platform = payload.get("platform") or _detect_platform(source.name)
+        if platform not in PLATFORM_LABELS:
+            return jsonify({"error": "请选择账单渠道"}), 400
+
+        try:
+            user_id = _safe_user_id(payload.get("user", source.parent.name if source.parent != DATA_DIR else ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        filename = source.name
+        if platform != _detect_platform(source.name):
+            filename = _rename_upload_for_platform(platform, source.name)
+        target = _unique_upload_target(user_id, filename, current_path=source.resolve())
+        if target.resolve() != source.resolve():
+            source.replace(target)
+        return jsonify({"file": _upload_file_payload(target, user_id)})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/process", methods=["POST"])
