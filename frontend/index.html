@@ -26,8 +26,8 @@
         </div>
         <nav class="side-nav">
           <button class="nav-item active" data-view="dashboard">仪表盘</button>
-          <button class="nav-item" data-view="import">导入账单</button>
-          <button class="nav-item" data-view="process">数据处理</button>
+          <button class="nav-item" data-view="workflow">生成版本</button>
+          <button class="nav-item" data-view="versions">版本管理</button>
           <button class="nav-item" data-view="model">模型配置</button>
         </nav>
       </aside>
@@ -42,6 +42,12 @@
 
         <section class="app-view active" id="view-dashboard">
           <section class="filter-bar" id="filter-bar">
+            <div class="filter-group version-filter">
+              <label>Processed Data</label>
+              <select id="dashboard-version-select">
+                <option value="">当前版本</option>
+              </select>
+            </div>
             <div class="filter-group">
               <label>用户</label>
               <select id="f-user">
@@ -172,14 +178,31 @@
           </section>
         </section>
 
-        <section class="app-view" id="view-import">
+        <section class="app-view" id="view-workflow">
           <div class="management-panel">
             <div class="panel-head">
               <div>
-                <h2>导入账单</h2>
-                <p>先填写这批账单属于谁，再选择平台和文件。</p>
+                <h2>生成 Processed Data</h2>
+                <p id="workflow-status">开启新批次后，当前未完成的处理中间数据会被清空；历史 Processed Data 版本会保留。</p>
               </div>
               <span id="upload-count">未上传文件</span>
+            </div>
+            <div class="workflow-steps">
+              <div class="workflow-step active">
+                <span>1</span>
+                <strong>整批上传</strong>
+                <small>一次提交本次要分析的账单文件</small>
+              </div>
+              <div class="workflow-step">
+                <span>2</span>
+                <strong>自动处理</strong>
+                <small>解析、清洗、拆分打标 batch</small>
+              </div>
+              <div class="workflow-step">
+                <span>3</span>
+                <strong>生成版本</strong>
+                <small>写入一个可切换的 Processed Data 快照</small>
+              </div>
             </div>
             <div class="upload-controls">
               <input type="text" id="upload-user" value="我" maxlength="40" placeholder="用户，例如：我 / 老婆" />
@@ -196,20 +219,9 @@
               <button class="btn-primary" id="btn-upload">上传</button>
             </div>
             <div class="uploaded-list" id="uploaded-list"></div>
-          </div>
-        </section>
-
-        <section class="app-view" id="view-process">
-          <div class="management-panel process-card">
-            <div class="panel-head">
-              <div>
-                <h2>数据处理</h2>
-                <p id="process-status">等待处理</p>
-              </div>
-            </div>
             <div class="process-actions">
-              <button class="btn-run" id="btn-process">一键分析</button>
-              <button class="btn-secondary" id="btn-run-tagging">开始 LLM 打标</button>
+              <button class="btn-run" id="btn-process">确认生成 Processed Data</button>
+              <button class="btn-secondary" id="btn-run-tagging">补跑 LLM 打标</button>
               <button class="btn-secondary" id="btn-apply-tagging">应用已有结果</button>
             </div>
             <div class="tagging-panel">
@@ -233,6 +245,18 @@
               </div>
               <div class="task-list" id="tagging-task-list"></div>
             </div>
+          </div>
+        </section>
+
+        <section class="app-view" id="view-versions">
+          <div class="management-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Processed Data 版本</h2>
+                <p id="version-status">选择一个历史快照作为看板数据源。</p>
+              </div>
+            </div>
+            <div class="version-list" id="processed-version-list"></div>
           </div>
         </section>
 

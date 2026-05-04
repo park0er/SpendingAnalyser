@@ -106,7 +106,7 @@ async function startBackend(port) {
     DATA_DIR: dataDir,
     OUTPUT_DIR: outputDir,
     CONFIG_PATH: configPath,
-    FRONTEND_DIR: resourcePath('frontend'),
+    FRONTEND_DIR: app.isPackaged ? resourcePath('frontend') : resourcePath('frontend', 'dist'),
   };
 
   if (app.isPackaged) {

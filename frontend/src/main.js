@@ -28,6 +28,7 @@ let selectedL2s = [];
 // Sort state
 let currentSort = { column: 'timestamp', order: 'desc' };
 let modelProfilesState = { active_id: '', profiles: [] };
+let processedVersionsState = { active_id: '', versions: [] };
 let taggingPollTimer = null;
 
 function setStatus(id, text, tone = '') {
@@ -81,15 +82,15 @@ function getFilters() {
 const VIEW_META = {
     dashboard: {
         title: '仪表盘',
-        subtitle: '跨用户、跨平台查看消费、资金流动和交易明细',
+        subtitle: '选择一个 Processed Data 快照，查看消费、资金流动和交易明细',
     },
-    import: {
-        title: '导入账单',
-        subtitle: '把每批账单归到指定用户，后续可合并或分开分析',
+    workflow: {
+        title: '生成版本',
+        subtitle: '整批上传账单，并生成一个独立的 Processed Data 快照',
     },
-    process: {
-        title: '数据处理',
-        subtitle: '重新解析已上传账单，并刷新本机分析结果',
+    versions: {
+        title: '版本管理',
+        subtitle: '维护历史 Processed Data 快照，并切换看板数据源',
     },
     model: {
         title: '模型配置',
@@ -119,11 +120,12 @@ function formatFileSize(bytes) {
 }
 
 async function loadDesktopState() {
-    const [config, uploads, profiles, tagging] = await Promise.all([
+    const [config, uploads, profiles, tagging, versions] = await Promise.all([
         api.config(),
         api.uploads(),
         api.modelProfiles(),
         api.taggingStatus(),
+        api.processedVersions(),
     ]);
 
     const savedUser = window.localStorage.getItem('spending-analyser-upload-user');
@@ -131,10 +133,65 @@ async function loadDesktopState() {
     document.getElementById('llm-base-url').value = config.base_url || '';
     document.getElementById('llm-model').value = config.model || '';
     modelProfilesState = profiles || { active_id: '', profiles: [] };
+    processedVersionsState = versions || { active_id: '', versions: [] };
     renderModelProfiles();
+    renderProcessedVersions();
     renderTaggingStatus(tagging);
     setStatus('model-status', config.api_key_configured ? '已保存' : '未配置', config.api_key_configured ? 'ok' : 'muted');
     renderUploads(uploads.files || []);
+}
+
+function versionLabel(version) {
+    const records = version.records || {};
+    const count = records.total ?? 0;
+    const status = version.status === 'processed' ? '已完成' : '待打标';
+    return `${version.name || version.id} · ${count} 条 · ${status}`;
+}
+
+function renderProcessedVersions() {
+    const select = document.getElementById('dashboard-version-select');
+    const list = document.getElementById('processed-version-list');
+    const versions = processedVersionsState.versions || [];
+
+    if (select) {
+        select.innerHTML = '';
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = versions.length ? '未选择版本' : '暂无版本';
+        emptyOpt.selected = !processedVersionsState.active_id;
+        select.appendChild(emptyOpt);
+        versions.forEach(version => {
+            const opt = document.createElement('option');
+            opt.value = version.id;
+            opt.textContent = versionLabel(version);
+            opt.selected = version.id === processedVersionsState.active_id;
+            select.appendChild(opt);
+        });
+    }
+
+    if (!list) return;
+    if (!versions.length) {
+        list.innerHTML = '<div class="empty-upload">还没有 Processed Data 版本</div>';
+        return;
+    }
+
+    list.innerHTML = versions.map(version => `
+        <div class="version-item ${version.id === processedVersionsState.active_id ? 'active-version' : ''}" data-version-id="${escapeHtml(version.id)}">
+            <div>
+                <strong>${escapeHtml(version.name || version.id)}</strong>
+                <span>${escapeHtml(version.created_at || '')}</span>
+            </div>
+            <div class="version-meta">
+                <span>${version.records?.total ?? 0} 条流水</span>
+                <span>${version.records?.pending_l2 ?? 0} 条待打标</span>
+                <span>${version.status === 'processed' ? '已完成' : '待打标'}</span>
+            </div>
+            <div class="version-actions">
+                <button class="btn-secondary" data-action="activate-version">用于看板</button>
+                <button class="uploaded-action danger" data-action="delete-version">删除</button>
+            </div>
+        </div>
+    `).join('');
 }
 
 function renderUploads(files) {
@@ -282,7 +339,7 @@ async function loadTaggingStatus() {
     try {
         renderTaggingStatus(await api.taggingStatus());
     } catch (err) {
-        setStatus('process-status', '读取打标状态失败', 'warn');
+        setStatus('workflow-status', '读取打标状态失败', 'warn');
     }
 }
 
@@ -328,8 +385,8 @@ function setupDesktopWorkbench() {
             fileInput.value = '';
             pickerLabel.textContent = '选择文件';
             await loadDesktopState();
-            setStatus('process-status', '可以分析', 'ok');
-            switchView('process');
+            setStatus('workflow-status', '本批账单已提交，当前工作区已重置为这批文件。', 'ok');
+            switchView('workflow');
         } catch (err) {
             setStatus('upload-count', err.message, 'warn');
         }
@@ -355,7 +412,7 @@ function setupDesktopWorkbench() {
                 setStatus('upload-count', '已保存，重新分析后生效', 'ok');
             }
             await loadDesktopState();
-            setStatus('process-status', '上传记录已变更，请重新一键分析', 'warn');
+            setStatus('workflow-status', '本批上传记录已变更，请重新生成 Processed Data。', 'warn');
         } catch (err) {
             setStatus('upload-count', err.message || '更新上传记录失败', 'warn');
         } finally {
@@ -414,23 +471,34 @@ function setupDesktopWorkbench() {
         const btn = document.getElementById('btn-process');
         try {
             btn.disabled = true;
-            setStatus('process-status', '分析中...', 'muted');
+            setStatus('workflow-status', '正在解析并生成 Processed Data...', 'muted');
             const result = await api.process();
             if (!result.has_data) {
-                setStatus('process-status', '还没有可解析账单', 'warn');
+                setStatus('workflow-status', '还没有可解析账单', 'warn');
                 return;
             }
             const pending = result.pending_tagging_records || 0;
             const batches = result.tagging_batches?.total || 0;
             setStatus(
-                'process-status',
-                `共 ${result.total_records} 条流水；${pending} 条消费待打标；${batches} 个 batch`,
+                'workflow-status',
+                `已生成版本：${result.total_records} 条流水；${pending} 条消费待打标；${batches} 个 batch`,
                 'ok'
             );
+            if (pending > 0) {
+                try {
+                    setStatus('workflow-status', '版本已生成，正在自动启动 LLM 打标...', 'muted');
+                    await api.runTagging();
+                    await waitForTaggingCompletion();
+                } catch (tagErr) {
+                    setStatus('workflow-status', tagErr.message || '自动 LLM 打标未完成，可稍后补跑', 'warn');
+                }
+            }
             await loadTaggingStatus();
+            await loadDesktopState();
             await reloadDashboard();
+            switchView('versions');
         } catch (err) {
-            setStatus('process-status', err.message || '分析失败', 'warn');
+            setStatus('workflow-status', err.message || '生成 Processed Data 失败', 'warn');
         } finally {
             btn.disabled = false;
         }
@@ -440,11 +508,13 @@ function setupDesktopWorkbench() {
         const btn = document.getElementById('btn-run-tagging');
         try {
             btn.disabled = true;
-            setStatus('process-status', 'LLM 打标已开始', 'muted');
+            setStatus('workflow-status', 'LLM 打标已开始', 'muted');
             await api.runTagging();
-            await loadTaggingStatus();
+            await waitForTaggingCompletion();
+            await loadDesktopState();
+            await reloadDashboard();
         } catch (err) {
-            setStatus('process-status', err.message || '启动打标失败', 'warn');
+            setStatus('workflow-status', err.message || '启动打标失败', 'warn');
         } finally {
             btn.disabled = false;
         }
@@ -452,15 +522,73 @@ function setupDesktopWorkbench() {
 
     document.getElementById('btn-apply-tagging').addEventListener('click', async () => {
         try {
-            setStatus('process-status', '正在应用已有结果...', 'muted');
+            setStatus('workflow-status', '正在应用已有结果...', 'muted');
             const result = await api.applyTagging();
-            setStatus('process-status', `已应用 ${result.applied_records || 0} 条结果`, 'ok');
+            setStatus('workflow-status', `已应用 ${result.applied_records || 0} 条结果`, 'ok');
             await loadTaggingStatus();
+            await loadDesktopState();
             await reloadDashboard();
         } catch (err) {
-            setStatus('process-status', err.message || '应用结果失败', 'warn');
+            setStatus('workflow-status', err.message || '应用结果失败', 'warn');
         }
     });
+
+    const versionSelect = document.getElementById('dashboard-version-select');
+    if (versionSelect) {
+        versionSelect.addEventListener('change', async (event) => {
+            if (!event.target.value) return;
+            await api.activateProcessedVersion(event.target.value);
+            await loadDesktopState();
+            await reloadDashboard();
+        });
+    }
+
+    const versionList = document.getElementById('processed-version-list');
+    if (versionList) {
+        versionList.addEventListener('click', async (event) => {
+            const action = event.target.dataset.action;
+            if (!action) return;
+            const row = event.target.closest('.version-item');
+            const versionId = row?.dataset.versionId;
+            if (!versionId) return;
+            try {
+                event.target.disabled = true;
+                if (action === 'activate-version') {
+                    await api.activateProcessedVersion(versionId);
+                    setStatus('version-status', '已切换看板版本', 'ok');
+                    await loadDesktopState();
+                    await reloadDashboard();
+                    switchView('dashboard');
+                } else if (action === 'delete-version') {
+                    await api.deleteProcessedVersion(versionId);
+                    setStatus('version-status', '版本已删除', 'ok');
+                    await loadDesktopState();
+                    await reloadDashboard();
+                }
+            } catch (err) {
+                setStatus('version-status', err.message || '版本操作失败', 'warn');
+            } finally {
+                event.target.disabled = false;
+            }
+        });
+    }
+}
+
+async function waitForTaggingCompletion() {
+    for (let i = 0; i < 180; i += 1) {
+        const status = await api.taggingStatus();
+        renderTaggingStatus(status);
+        const latest = status.latest_task;
+        if (latest && latest.status !== 'queued' && latest.status !== 'running') {
+            if (latest.status === 'failed') {
+                throw new Error(latest.message || 'LLM 打标失败');
+            }
+            setStatus('workflow-status', latest.message || 'LLM 打标已完成', 'ok');
+            return latest;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    throw new Error('LLM 打标仍在运行，请稍后查看版本状态');
 }
 
 function switchView(view) {

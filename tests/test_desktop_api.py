@@ -35,6 +35,26 @@ def test_empty_first_launch_returns_safe_meta_and_summary(tmp_path, monkeypatch)
     assert summary.get_json()["total_spend"] == 0
 
 
+def test_dashboard_reads_do_not_process_uploaded_bills(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+
+    def fail_pipeline(*_args, **_kwargs):
+        raise AssertionError("dashboard API must not start processing")
+
+    monkeypatch.setattr(api_module, "run_pipeline", fail_pipeline)
+    uploaded = api_module.DATA_DIR / "我" / "支付宝_bill.csv"
+    uploaded.parent.mkdir(parents=True)
+    uploaded.write_text("raw", encoding="utf-8")
+
+    summary = client.get("/api/summary")
+    meta = client.get("/api/meta")
+
+    assert summary.status_code == 200
+    assert summary.get_json()["total_records"] == 0
+    assert meta.get_json()["users"] == [{"id": "我", "label": "我"}]
+    assert not (api_module.OUTPUT_DIR / "processed_data.csv").exists()
+
+
 def test_model_config_can_be_saved_and_read_without_exposing_key(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
 
@@ -192,84 +212,45 @@ def test_uploaded_file_can_be_moved_to_another_user_and_platform(tmp_path, monke
     assert listed == [updated]
 
 
-def test_processing_rebuilds_dashboard_from_active_upload_batches(tmp_path, monkeypatch):
+def test_new_upload_clears_current_workspace_but_keeps_processed_versions(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
-    first_upload = client.post(
+    version_dir = api_module.OUTPUT_DIR / "processed_versions" / "version-old"
+    version_dir.mkdir(parents=True)
+    (version_dir / "processed_data.csv").write_text("snapshot", encoding="utf-8")
+    (api_module.OUTPUT_DIR / "processed_versions.json").write_text(
+        json.dumps({"active_id": "version-old", "versions": [{"id": "version-old", "name": "旧版本"}]}),
+        encoding="utf-8",
+    )
+    (api_module.OUTPUT_DIR / "processed_data.csv").write_text("current", encoding="utf-8")
+    (api_module.OUTPUT_DIR / "tagging_tasks.json").write_text("[]", encoding="utf-8")
+    batch_dir = api_module.OUTPUT_DIR / "tagging_batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "batch_000.txt").write_text("old prompt", encoding="utf-8")
+    old_file = api_module.DATA_DIR / "我" / "支付宝_old.csv"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("old", encoding="utf-8")
+
+    response = client.post(
         "/api/uploads",
         data={
-            "platform": "alipay",
-            "user": "我",
-            "files": (io.BytesIO(b"first"), "first.csv"),
-        },
-        content_type="multipart/form-data",
-    ).get_json()["files"][0]
-    client.post(
-        "/api/uploads",
-        data={
-            "platform": "jd",
+            "platform": "wechat",
             "user": "老婆",
-            "files": (io.BytesIO(b"second"), "second.csv"),
+            "files": (io.BytesIO(b"new"), "new.xlsx"),
         },
         content_type="multipart/form-data",
     )
 
-    def fake_pipeline(_data_dir, output_dir, **_kwargs):
-        output_path = api_module.Path(output_dir)
-        batch_id = output_path.name
-        df = create_empty_uul()
-        df.loc[len(df)] = {
-            "source_platform": "alipay",
-            "user_id": "我",
-            "transaction_id": f"{batch_id}-tx",
-            "timestamp": "2026-01-01 10:00:00",
-            "direction": "支出",
-            "amount": 10.0,
-            "counterparty": "商户",
-            "description": "商品",
-            "payment_method": "",
-            "status": "交易成功",
-            "platform_category": "",
-            "platform_tx_type": "",
-            "original_tx_id": "",
-            "merchant_order_id": "",
-            "note": "",
-            "track": "consumption",
-            "is_refunded": False,
-            "refund_amount": 0.0,
-            "effective_amount": 10.0,
-            "is_ignored": False,
-            "global_category_l1": "",
-            "global_category_l2": "",
-        }
-        tagging_dir = output_path / "tagging_batches"
-        tagging_dir.mkdir(parents=True, exist_ok=True)
-        (tagging_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
-        (tagging_dir / "manifest.json").write_text(
-            json.dumps([{"file": str(tagging_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
-            encoding="utf-8",
-        )
-        output_path.mkdir(parents=True, exist_ok=True)
-        df.to_csv(output_path / "processed_data.csv", index=False, encoding="utf-8-sig")
-        return df
-
-    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
-
-    first = client.post("/api/process")
-    first_status = client.get("/api/tagging/status").get_json()
-    first_dashboard = client.get("/api/summary").get_json()
-
-    delete_response = client.delete(f"/api/uploads/{first_upload['relative_path']}")
-    second = client.post("/api/process")
-    second_status = client.get("/api/tagging/status").get_json()
-    second_dashboard = client.get("/api/summary").get_json()
-
-    assert first.status_code == 200
-    assert first_status["batches"]["total"] == 2
-    assert first_dashboard["total_records"] == 2
-    assert delete_response.status_code == 200
-    assert second.status_code == 200
-    assert second_status["batches"]["total"] == 1
-    assert second_dashboard["total_records"] == 1
+    uploaded = response.get_json()["files"][0]
+    assert response.status_code == 200
+    assert uploaded["relative_path"].startswith("老婆/")
+    assert not old_file.exists()
+    assert not (api_module.OUTPUT_DIR / "processed_data.csv").exists()
+    assert not (api_module.OUTPUT_DIR / "tagging_tasks.json").exists()
+    assert not batch_dir.exists()
+    versions = json.loads((api_module.OUTPUT_DIR / "processed_versions.json").read_text(encoding="utf-8"))
+    assert versions["active_id"] == ""
+    assert versions["versions"][0]["id"] == "version-old"
+    assert (version_dir / "processed_data.csv").read_text(encoding="utf-8") == "snapshot"
 
 
 def _write_processed_fixture(api_module, rows):
@@ -299,126 +280,109 @@ def _write_processed_fixture(api_module, rows):
             "global_category_l1": row.get("global_category_l1", ""),
             "global_category_l2": row.get("global_category_l2", ""),
         }
-        for extra_col in ["upload_batch_id", "upload_batch_row_index"]:
-            if extra_col in row:
-                df.at[len(df) - 1, extra_col] = row[extra_col]
     api_module.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
 
 
-def test_manual_category_update_syncs_override_and_batch_result(tmp_path, monkeypatch):
+def test_process_creates_processed_data_version_and_can_switch_versions(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
-    _write_processed_fixture(api_module, [{"transaction_id": "tx-1", "upload_batch_id": "upload-1", "upload_batch_row_index": 0}])
-    batch_dir = api_module.OUTPUT_DIR / "upload_batches" / "upload-1" / "tagging_batches"
+    first = create_empty_uul()
+    first.loc[len(first)] = {
+        "source_platform": "alipay",
+        "user_id": "我",
+        "transaction_id": "tx-first",
+        "timestamp": "2026-01-01 10:00:00",
+        "direction": "支出",
+        "amount": 10.0,
+        "counterparty": "商户A",
+        "description": "商品",
+        "payment_method": "",
+        "status": "交易成功",
+        "platform_category": "",
+        "platform_tx_type": "",
+        "original_tx_id": "",
+        "merchant_order_id": "",
+        "note": "",
+        "track": "consumption",
+        "is_refunded": False,
+        "refund_amount": 0.0,
+        "effective_amount": 10.0,
+        "is_ignored": False,
+        "global_category_l1": "",
+        "global_category_l2": "",
+    }
+    second = first.copy()
+    second.at[0, "transaction_id"] = "tx-second"
+    second.at[0, "counterparty"] = "商户B"
+    frames = [first, second]
+
+    def fake_pipeline(_data_dir, output_dir):
+        df = frames.pop(0)
+        api_module.Path(output_dir).mkdir(parents=True, exist_ok=True)
+        df.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+        return df
+
+    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
+
+    first_response = client.post("/api/process")
+    first_version = first_response.get_json()["processed_version"]["id"]
+    second_response = client.post("/api/process")
+    second_version = second_response.get_json()["processed_version"]["id"]
+    versions = client.get("/api/processed-versions").get_json()
+    switch_response = client.post("/api/processed-versions/active", json={"id": first_version})
+    tx = client.get("/api/transactions").get_json()["records"][0]
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_version != second_version
+    assert versions["active_id"] == second_version
+    assert [v["id"] for v in versions["versions"]] == [second_version, first_version]
+    assert switch_response.status_code == 200
+    assert tx["id"] == "tx-first"
+
+
+def test_manual_category_update_updates_active_processed_version(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+    version = api_module._save_processed_version("初始版本", status="processed")
+
+    response = client.put("/api/transactions/tx-1", json={"category_l1": "餐饮美食", "category_l2": "堂食正餐"})
+    client.post("/api/processed-versions/active", json={"id": version["id"]})
+    tx = client.get("/api/transactions").get_json()["records"][0]
+
+    assert response.status_code == 200
+    assert tx["category_l1"] == "餐饮美食"
+    assert tx["category_l2"] == "堂食正餐"
+
+
+def test_deleting_last_active_processed_version_clears_current_dashboard_data(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+    version = api_module._save_processed_version("临时版本", status="processed")
+    (api_module.OUTPUT_DIR / "tag_overrides.csv").write_text("transaction_id,l1,l2\n", encoding="utf-8")
+
+    response = client.delete(f"/api/processed-versions/{version['id']}")
+    summary = client.get("/api/summary")
+    versions = client.get("/api/processed-versions").get_json()
+
+    assert response.status_code == 200
+    assert versions == {"active_id": "", "versions": []}
+    assert summary.get_json()["total_records"] == 0
+    assert not (api_module.OUTPUT_DIR / "processed_data.csv").exists()
+    assert not (api_module.OUTPUT_DIR / "tag_overrides.csv").exists()
+
+
+def test_run_tagging_updates_active_processed_version(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+    version = api_module._save_processed_version("待打标版本", status="pending_tagging")
+    batch_dir = api_module.OUTPUT_DIR / "tagging_batches"
     batch_dir.mkdir(parents=True)
     (batch_dir / "manifest.json").write_text(
         json.dumps([{"file": str(batch_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
         encoding="utf-8",
     )
     (batch_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
-    (batch_dir / "batch_000_result.json").write_text(
-        json.dumps([{"index": 1, "l1": "餐饮美食", "l2": "外卖配送"}], ensure_ascii=False),
-        encoding="utf-8",
-    )
-    (api_module.OUTPUT_DIR / "upload_batches.json").write_text(
-        json.dumps({
-            "batches": [{
-                "id": "upload-1",
-                "active": True,
-                "files": [],
-                "status": "processed",
-                "output_dir": str(api_module.OUTPUT_DIR / "upload_batches" / "upload-1"),
-            }]
-        }),
-        encoding="utf-8",
-    )
-
-    response = client.put("/api/transactions/tx-1", json={"category_l1": "交通出行", "category_l2": "公共交通"})
-
-    assert response.status_code == 200
-    overrides = (api_module.OUTPUT_DIR / "tag_overrides.csv").read_text(encoding="utf-8")
-    result = json.loads((batch_dir / "batch_000_result.json").read_text(encoding="utf-8"))
-    tx = client.get("/api/transactions").get_json()["records"][0]
-    assert tx["category_l1"] == "交通出行"
-    assert tx["category_l2"] == "公共交通"
-    assert "tx-1" in overrides
-    assert "公共交通" in overrides
-    assert result == [{"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"}]
-
-
-def test_llm_result_merge_preserves_manual_batch_result(tmp_path, monkeypatch):
-    _client, api_module = make_client(tmp_path, monkeypatch)
-    result_file = api_module.OUTPUT_DIR / "upload_batches" / "upload-1" / "tagging_batches" / "batch_000_result.json"
-    result_file.parent.mkdir(parents=True)
-    result_file.write_text(
-        json.dumps([{"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"}], ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    api_module._merge_result_items(
-        result_file,
-        [
-            {"index": 1, "l1": "餐饮美食", "l2": "外卖配送"},
-            {"index": 2, "l1": "购物消费", "l2": "日用百货"},
-        ],
-    )
-
-    result = json.loads(result_file.read_text(encoding="utf-8"))
-    assert result == [
-        {"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"},
-        {"index": 2, "l1": "购物消费", "l2": "日用百货"},
-    ]
-
-
-def test_run_tagging_consumes_active_upload_batch_results(tmp_path, monkeypatch):
-    client, api_module = make_client(tmp_path, monkeypatch)
-    client.post(
-        "/api/uploads",
-        data={
-            "platform": "alipay",
-            "user": "我",
-            "files": (io.BytesIO(b"csv-content"), "january.csv"),
-        },
-        content_type="multipart/form-data",
-    )
-
-    def fake_pipeline(_data_dir, output_dir, **_kwargs):
-        output_path = api_module.Path(output_dir)
-        df = create_empty_uul()
-        df.loc[len(df)] = {
-            "source_platform": "alipay",
-            "user_id": "我",
-            "transaction_id": "tx-llm",
-            "timestamp": "2026-01-01 10:00:00",
-            "direction": "支出",
-            "amount": 10.0,
-            "counterparty": "商户",
-            "description": "商品",
-            "payment_method": "",
-            "status": "交易成功",
-            "platform_category": "",
-            "platform_tx_type": "",
-            "original_tx_id": "",
-            "merchant_order_id": "",
-            "note": "",
-            "track": "consumption",
-            "is_refunded": False,
-            "refund_amount": 0.0,
-            "effective_amount": 10.0,
-            "is_ignored": False,
-            "global_category_l1": "",
-            "global_category_l2": "",
-        }
-        tagging_dir = output_path / "tagging_batches"
-        tagging_dir.mkdir(parents=True, exist_ok=True)
-        (tagging_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
-        (tagging_dir / "manifest.json").write_text(
-            json.dumps([{"file": str(tagging_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
-            encoding="utf-8",
-        )
-        output_path.mkdir(parents=True, exist_ok=True)
-        df.to_csv(output_path / "processed_data.csv", index=False, encoding="utf-8-sig")
-        return df
 
     class FakeMessages:
         def create(self, **_kwargs):
@@ -435,7 +399,6 @@ def test_run_tagging_consumes_active_upload_batch_results(tmp_path, monkeypatch)
         def __init__(self, **_kwargs):
             self.messages = FakeMessages()
 
-    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
     monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeAnthropic))
     client.post(
         "/api/model-profiles",
@@ -447,23 +410,23 @@ def test_run_tagging_consumes_active_upload_batch_results(tmp_path, monkeypatch)
             "make_active": True,
         },
     )
-    client.post("/api/process")
 
     response = client.post("/api/tagging/run")
     latest = None
     for _ in range(40):
         latest = client.get("/api/tagging/status").get_json()["latest_task"]
-        if latest and latest["status"] != "queued" and latest["status"] != "running":
+        if latest and latest["status"] not in {"queued", "running"}:
             break
         time.sleep(0.05)
+    client.post("/api/processed-versions/active", json={"id": version["id"]})
     tx = client.get("/api/transactions").get_json()["records"][0]
-    status = client.get("/api/tagging/status").get_json()
+    versions = client.get("/api/processed-versions").get_json()["versions"]
 
     assert response.status_code == 200
     assert latest["status"] == "completed"
     assert tx["category_l1"] == "餐饮美食"
     assert tx["category_l2"] == "堂食正餐"
-    assert status["batches"] == {"total": 1, "completed": 1, "pending": 0}
+    assert versions[0]["status"] == "processed"
 
 
 def test_apply_existing_tagging_results_updates_dashboard_data(tmp_path, monkeypatch):
@@ -562,6 +525,60 @@ def test_process_response_separates_total_rows_from_pending_tagging_records(tmp_
     assert payload["total_records"] == 2
     assert payload["consumption_records"] == 1
     assert payload["pending_tagging_records"] == 1
+
+
+def test_process_clears_stale_tagging_intermediates_before_generating_version(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    df = create_empty_uul()
+    df.loc[len(df)] = {
+        "source_platform": "alipay",
+        "user_id": "我",
+        "transaction_id": "consume-1",
+        "timestamp": "2026-01-01 10:00:00",
+        "direction": "支出",
+        "amount": 10.0,
+        "counterparty": "餐厅",
+        "description": "午餐",
+        "payment_method": "",
+        "status": "交易成功",
+        "platform_category": "",
+        "platform_tx_type": "",
+        "original_tx_id": "",
+        "merchant_order_id": "",
+        "note": "",
+        "track": "consumption",
+        "is_refunded": False,
+        "refund_amount": 0.0,
+        "effective_amount": 10.0,
+        "is_ignored": False,
+        "global_category_l1": "",
+        "global_category_l2": "",
+    }
+    batch_dir = api_module.OUTPUT_DIR / "tagging_batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "batch_999_result.json").write_text("[]", encoding="utf-8")
+    (api_module.OUTPUT_DIR / "tagging_tasks.json").write_text(
+        json.dumps([{"id": "stale", "status": "running"}]),
+        encoding="utf-8",
+    )
+
+    def fake_pipeline(_data_dir, output_dir):
+        api_module.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        fresh_batch_dir = api_module.Path(output_dir) / "tagging_batches"
+        fresh_batch_dir.mkdir(parents=True, exist_ok=True)
+        (fresh_batch_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
+        df.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+        return df
+
+    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
+
+    response = client.post("/api/process")
+    status = client.get("/api/tagging/status").get_json()
+
+    assert response.status_code == 200
+    assert status["latest_task"] is None
+    assert status["batches"] == {"total": 1, "completed": 0, "pending": 1}
+    assert not (batch_dir / "batch_999_result.json").exists()
 
 
 def test_model_profiles_can_be_saved_and_switched_without_exposing_keys(tmp_path, monkeypatch):
