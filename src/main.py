@@ -65,7 +65,13 @@ def _parse_data_scope(data_path: Path, user_id: Optional[str] = None) -> list[pd
     return dfs
 
 
-def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
+def run_pipeline(
+    data_dir: str,
+    output_dir: str = "output",
+    overrides_path: Optional[str] = None,
+    tagging_dir: Optional[str] = None,
+    export_overrides: bool = True,
+) -> pd.DataFrame:
     """
     Run the full data processing pipeline.
 
@@ -116,7 +122,7 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
     print(f"  ✅ Consumption: {consumption} | Cashflow: {cashflow}")
 
     # ── Step 4: Tag Inheritance ───────────────────────────────────
-    overrides_file = str(output_path / "tag_overrides.csv")
+    overrides_file = overrides_path or str(output_path / "tag_overrides.csv")
     print(f"\n🏷️  Step 4: Tag inheritance...")
     all_data = apply_tag_inheritance(all_data, overrides_file)
 
@@ -125,7 +131,7 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
     print(f"  ✅ {with_l1} records have L1, {with_l2} have L2 (inherited)")
 
     # ── Step 5: Generate LLM Tagging Batches ─────────────────────
-    tagging_dir = str(output_path / "tagging_batches")
+    tagging_dir = tagging_dir or str(output_path / "tagging_batches")
     print(f"\n🤖 Step 5: Generating LLM tagging batches...")
     batches = generate_tagging_batches(all_data, tagging_dir)
     print(f"  ✅ {len(batches)} batch files generated in {tagging_dir}")
@@ -137,8 +143,9 @@ def run_pipeline(data_dir: str, output_dir: str = "output") -> pd.DataFrame:
     print(f"\n💾 Processed data saved to {data_file}")
 
     # Update tag_overrides with any newly tagged records for future reruns
-    count = export_tag_overrides(all_data, overrides_file)
-    print(f"  Tag overrides updated: {count} records saved to {overrides_file}")
+    if export_overrides:
+        count = export_tag_overrides(all_data, overrides_file)
+        print(f"  Tag overrides updated: {count} records saved to {overrides_file}")
 
     # ── Summary ──────────────────────────────────────────────────
     print("\n" + "=" * 60)

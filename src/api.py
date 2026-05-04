@@ -7,6 +7,7 @@ Serves processed spending data to the frontend.
 import os
 import re
 import json
+import shutil
 import threading
 import uuid
 import traceback
@@ -41,6 +42,9 @@ OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "output"))
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.env"))
 MODEL_PROFILES_PATH = CONFIG_PATH.with_name("model_profiles.json")
 TAGGING_TASKS_PATH = OUTPUT_DIR / "tagging_tasks.json"
+UPLOAD_BATCHES_PATH = OUTPUT_DIR / "upload_batches.json"
+UPLOAD_BATCH_OUTPUT_DIR = OUTPUT_DIR / "upload_batches"
+ACTIVE_UPLOAD_WORK_DIR = OUTPUT_DIR / "_active_upload_work"
 
 PLATFORM_LABELS = {
     "alipay": "支付宝",
@@ -107,7 +111,7 @@ def _get_df() -> pd.DataFrame:
         if csv_path.exists():
             _df = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
         else:
-            _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
+            _df = _process_active_upload_batches()
     return _df
 
 
@@ -320,8 +324,233 @@ def _latest_task() -> Optional[dict]:
     return tasks[-1] if tasks else None
 
 
+def _batch_output_dir(batch_id: str) -> Path:
+    return UPLOAD_BATCH_OUTPUT_DIR / batch_id
+
+
+def _read_upload_batches() -> list[dict]:
+    if not UPLOAD_BATCHES_PATH.exists():
+        return []
+    try:
+        data = json.loads(UPLOAD_BATCHES_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    batches = data.get("batches", data if isinstance(data, list) else [])
+    return batches if isinstance(batches, list) else []
+
+
+def _write_upload_batches(batches: list[dict]) -> None:
+    UPLOAD_BATCHES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    UPLOAD_BATCHES_PATH.write_text(
+        json.dumps({"batches": batches}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _ensure_upload_batches() -> list[dict]:
+    batches = _read_upload_batches()
+    known_paths = {
+        file_info.get("relative_path")
+        for batch in batches
+        for file_info in batch.get("files", [])
+    }
+    missing_files = []
+    for path, user_id in _iter_upload_files():
+        relative_path = str(path.relative_to(DATA_DIR))
+        if relative_path not in known_paths:
+            payload = _upload_file_payload(path, user_id)
+            payload["active"] = True
+            missing_files.append(payload)
+
+    if missing_files:
+        batches.append({
+            "id": f"upload-legacy-{uuid.uuid4().hex[:8]}",
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "active": True,
+            "status": "uploaded",
+            "files": missing_files,
+            "output_dir": "",
+        })
+        _write_upload_batches(batches)
+    return batches
+
+
+def _active_upload_batches() -> list[dict]:
+    batches = _ensure_upload_batches()
+    return [
+        batch for batch in batches
+        if batch.get("active", True)
+        and any(file_info.get("active", True) for file_info in batch.get("files", []))
+    ]
+
+
+def _active_upload_files() -> list[tuple[dict, dict]]:
+    pairs = []
+    for batch in _active_upload_batches():
+        for file_info in batch.get("files", []):
+            if file_info.get("active", True):
+                pairs.append((batch, file_info))
+    return pairs
+
+
+def _save_uploaded_batch(files: list[dict]) -> dict:
+    batches = _read_upload_batches()
+    batch_id = f"upload-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    batch_files = []
+    for file_info in files:
+        item = dict(file_info)
+        item["active"] = True
+        item["upload_batch_id"] = batch_id
+        batch_files.append(item)
+    batch = {
+        "id": batch_id,
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "active": True,
+        "status": "uploaded",
+        "files": batch_files,
+        "output_dir": str(_batch_output_dir(batch_id)),
+    }
+    batches.append(batch)
+    _write_upload_batches(batches)
+    return batch
+
+
+def _update_upload_manifest_path(old_relative_path: str, new_payload: Optional[dict], active: Optional[bool] = None) -> None:
+    batches = _read_upload_batches()
+    changed = False
+    for batch in batches:
+        for file_info in batch.get("files", []):
+            if file_info.get("relative_path") != old_relative_path:
+                continue
+            if new_payload:
+                file_info.update(new_payload)
+            if active is not None:
+                file_info["active"] = active
+            batch["updated_at"] = _now_iso()
+            changed = True
+        active_files = [file_info for file_info in batch.get("files", []) if file_info.get("active", True)]
+        batch["active"] = bool(active_files)
+        if not active_files:
+            batch["status"] = "removed"
+    if changed:
+        _write_upload_batches(batches)
+
+
+def _active_tagging_dirs() -> list[tuple[str, Path]]:
+    dirs = []
+    for batch in _active_upload_batches():
+        batch_id = batch.get("id", "")
+        if not batch_id:
+            continue
+        batch_dir = Path(batch.get("output_dir") or _batch_output_dir(batch_id))
+        tagging_dir = batch_dir / "tagging_batches"
+        if tagging_dir.exists():
+            dirs.append((batch_id, tagging_dir))
+    return dirs
+
+
+def _read_batch_manifest(batch_dir: Path) -> list[dict]:
+    manifest_file = batch_dir / "manifest.json"
+    if not manifest_file.exists():
+        return []
+    try:
+        data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _result_items_by_index(result_file: Path) -> dict[int, dict]:
+    if not result_file.exists():
+        return {}
+    try:
+        data = json.loads(result_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, list):
+        return {}
+    items = {}
+    for item in data:
+        try:
+            items[int(item.get("index", 0))] = item
+        except (TypeError, ValueError):
+            continue
+    return items
+
+
+def _batch_result_file(batch_dir: Path, batch: dict) -> Path:
+    return batch_dir / f"{Path(batch['file']).stem}_result.json"
+
+
+def _batch_result_complete(batch_dir: Path, batch: dict) -> bool:
+    result_items = _result_items_by_index(_batch_result_file(batch_dir, batch))
+    expected = len(batch.get("indices", [])) or int(batch.get("count", 0) or 0)
+    if expected <= 0:
+        return False
+    return all(index in result_items for index in range(1, expected + 1))
+
+
+def _merge_result_items(result_file: Path, new_items: list[dict]) -> None:
+    existing = _result_items_by_index(result_file)
+    for item in new_items:
+        try:
+            idx = int(item.get("index", 0))
+        except (TypeError, ValueError):
+            continue
+        if idx <= 0:
+            continue
+        if existing.get(idx, {}).get("source") == "manual" and item.get("source") != "manual":
+            continue
+        existing[idx] = item
+
+    merged = [existing[index] for index in sorted(existing)]
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _pending_tagging_batches() -> list[tuple[str, Path, Path, dict]]:
+    pending = []
+    for batch_id, batch_dir in _active_tagging_dirs():
+        for batch in _read_batch_manifest(batch_dir):
+            batch_file = batch_dir / Path(batch["file"]).name
+            if not _batch_result_complete(batch_dir, batch):
+                pending.append((batch_id, batch_dir, batch_file, batch))
+
+    if not pending and not _active_tagging_dirs():
+        legacy_dir = OUTPUT_DIR / "tagging_batches"
+        for batch_file in sorted(legacy_dir.glob("batch_*.txt")) if legacy_dir.exists() else []:
+            result_file = batch_file.with_name(f"{batch_file.stem}_result.json")
+            if not result_file.exists():
+                pending.append(("", legacy_dir, batch_file, {"file": str(batch_file), "indices": [], "count": 1}))
+    return pending
+
+
 def _tagging_batch_counts() -> dict:
+    batch_entries = []
+    for _batch_id, batch_dir in _active_tagging_dirs():
+        for batch in _read_batch_manifest(batch_dir):
+            batch_entries.append((batch_dir, batch))
+
+    if batch_entries:
+        completed = sum(1 for batch_dir, batch in batch_entries if _batch_result_complete(batch_dir, batch))
+        return {
+            "total": len(batch_entries),
+            "completed": completed,
+            "pending": max(len(batch_entries) - completed, 0),
+        }
+
     batch_dir = OUTPUT_DIR / "tagging_batches"
+    manifest = _read_batch_manifest(batch_dir) if batch_dir.exists() else []
+    if manifest:
+        completed = sum(1 for batch in manifest if _batch_result_complete(batch_dir, batch))
+        return {
+            "total": len(manifest),
+            "completed": completed,
+            "pending": max(len(manifest) - completed, 0),
+        }
+
     batch_files = sorted(batch_dir.glob("batch_*.txt")) if batch_dir.exists() else []
     result_files = sorted(batch_dir.glob("batch_*_result.json")) if batch_dir.exists() else []
     return {
@@ -368,17 +597,141 @@ def _tagging_record_counts_from_df(df: pd.DataFrame) -> dict:
 def _apply_tagging_results_to_csv() -> int:
     global _df
     csv_path = OUTPUT_DIR / "processed_data.csv"
-    if not csv_path.exists():
-        return 0
-
-    before = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
+    before = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig")) if csv_path.exists() else _empty_df()
     before_tagged = int((before["global_category_l2"].fillna("").astype(str).str.strip() != "").sum())
-    after = _normalise_df(apply_tagging_results(before, str(OUTPUT_DIR / "tagging_batches")))
+    if _active_upload_batches():
+        after = _rebuild_master_from_batch_outputs()
+    else:
+        after = _normalise_df(apply_tagging_results(before, str(OUTPUT_DIR / "tagging_batches")))
+        after.to_csv(str(csv_path), index=False, encoding="utf-8-sig")
+        export_tag_overrides(after, str(OUTPUT_DIR / "tag_overrides.csv"))
+        _df = after
     after_tagged = int((after["global_category_l2"].fillna("").astype(str).str.strip() != "").sum())
-    after.to_csv(str(csv_path), index=False, encoding="utf-8-sig")
-    export_tag_overrides(after, str(OUTPUT_DIR / "tag_overrides.csv"))
-    _df = after
     return max(after_tagged - before_tagged, 0)
+
+
+def _materialise_batch_input(batch: dict) -> Path:
+    batch_id = batch["id"]
+    work_dir = ACTIVE_UPLOAD_WORK_DIR / batch_id
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_info in batch.get("files", []):
+        if not file_info.get("active", True):
+            continue
+        source = DATA_DIR / file_info["relative_path"]
+        if not source.exists():
+            continue
+        target = work_dir / file_info["relative_path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return work_dir
+
+
+def _prepare_batch_dataframe(batch: dict, df: pd.DataFrame) -> pd.DataFrame:
+    df = _normalise_df(df)
+    df["upload_batch_id"] = batch["id"]
+    df["upload_batch_row_index"] = list(range(len(df)))
+    return df
+
+
+def _save_batch_dataframe(batch: dict, df: pd.DataFrame) -> None:
+    batch_dir = Path(batch.get("output_dir") or _batch_output_dir(batch["id"]))
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(batch_dir / "processed_data.csv", index=False, encoding="utf-8-sig")
+
+
+def _process_active_upload_batches() -> pd.DataFrame:
+    global _df
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    batches = _active_upload_batches()
+    processed_frames = []
+    all_batches = _ensure_upload_batches()
+    by_id = {batch.get("id"): batch for batch in all_batches}
+
+    if not batches:
+        _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
+        return _df
+
+    for batch in batches:
+        batch_id = batch["id"]
+        batch_dir = _batch_output_dir(batch_id)
+        work_dir = _materialise_batch_input(batch)
+        if not any(work_dir.rglob("*")):
+            continue
+        df = run_pipeline(
+            str(work_dir),
+            str(batch_dir),
+            overrides_path=str(OUTPUT_DIR / "tag_overrides.csv"),
+            tagging_dir=str(batch_dir / "tagging_batches"),
+            export_overrides=False,
+        )
+        df = apply_tagging_results(_normalise_df(df), str(batch_dir / "tagging_batches"))
+        df = _prepare_batch_dataframe(batch, df)
+        _save_batch_dataframe(batch, df)
+        batch["status"] = "processed"
+        batch["updated_at"] = _now_iso()
+        batch["output_dir"] = str(batch_dir)
+        if batch_id in by_id:
+            by_id[batch_id].update(batch)
+        processed_frames.append(df)
+
+    _write_upload_batches(list(by_id.values()))
+    _df = _write_master_dataframe(processed_frames)
+    return _df
+
+
+def _write_master_dataframe(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    global _df
+    if frames:
+        master = _normalise_df(pd.concat(frames, ignore_index=True))
+    else:
+        master = _empty_df()
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    master.to_csv(OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+    export_tag_overrides(master, str(OUTPUT_DIR / "tag_overrides.csv"))
+    _df = master
+    return master
+
+
+def _rebuild_master_from_batch_outputs() -> pd.DataFrame:
+    frames = []
+    for batch in _active_upload_batches():
+        batch_dir = Path(batch.get("output_dir") or _batch_output_dir(batch["id"]))
+        csv_path = batch_dir / "processed_data.csv"
+        if not csv_path.exists():
+            continue
+        df = _normalise_df(pd.read_csv(str(csv_path), encoding="utf-8-sig"))
+        df = apply_tagging_results(df, str(batch_dir / "tagging_batches"))
+        df = _prepare_batch_dataframe(batch, df)
+        _save_batch_dataframe(batch, df)
+        frames.append(df)
+    return _write_master_dataframe(frames)
+
+
+def _sync_manual_tag_to_batch_result(row: pd.Series, l1: str, l2: str) -> None:
+    batch_id = str(row.get("upload_batch_id", "")).strip()
+    if not batch_id:
+        return
+    try:
+        row_index = int(float(row.get("upload_batch_row_index", -1)))
+    except (TypeError, ValueError):
+        return
+    if row_index < 0:
+        return
+
+    batch_dir = _batch_output_dir(batch_id) / "tagging_batches"
+    for batch in _read_batch_manifest(batch_dir):
+        indices = batch.get("indices", [])
+        if row_index not in indices:
+            continue
+        result_index = indices.index(row_index) + 1
+        _merge_result_items(
+            _batch_result_file(batch_dir, batch),
+            [{"index": result_index, "l1": l1, "l2": l2, "source": "manual"}],
+        )
+        return
 
 
 def _safe_upload_name(platform: str, original_name: str) -> str:
@@ -474,7 +827,7 @@ def _iter_upload_files():
 
 
 def _uploaded_user_ids() -> list[str]:
-    return sorted({user_id for _, user_id in _iter_upload_files() if user_id})
+    return sorted({file_info.get("user", "") for _batch, file_info in _active_upload_files() if file_info.get("user", "")})
 
 
 def _upload_file_payload(path: Path, user_id: str) -> dict:
@@ -485,6 +838,16 @@ def _upload_file_payload(path: Path, user_id: str) -> dict:
         "user": user_id,
         "size": path.stat().st_size,
     }
+
+
+def _manifest_upload_payload(batch: dict, file_info: dict) -> dict:
+    payload = dict(file_info)
+    payload["upload_batch_id"] = batch.get("id", payload.get("upload_batch_id", ""))
+    payload["batch_status"] = batch.get("status", "")
+    source = DATA_DIR / payload.get("relative_path", "")
+    if source.exists():
+        payload["size"] = source.stat().st_size
+    return payload
 
 
 @app.route("/api/health")
@@ -587,23 +950,22 @@ def _run_tagging_task(task_id: str) -> None:
 
         from anthropic import Anthropic
 
-        batch_dir = OUTPUT_DIR / "tagging_batches"
-        batch_files = sorted(batch_dir.glob("batch_*.txt"))
-        if not batch_files:
+        pending_batches = _pending_tagging_batches()
+        total_batches = _tagging_batch_counts()["total"]
+        if not total_batches:
             raise RuntimeError("没有找到待打标 batch，请先执行一键分析")
 
-        pending_files = [p for p in batch_files if not p.with_name(f"{p.stem}_result.json").exists()]
         task.update({
             "status": "running",
             "message": "正在调用 LLM 打标",
-            "total_batches": len(batch_files),
-            "completed_batches": len(batch_files) - len(pending_files),
+            "total_batches": total_batches,
+            "completed_batches": total_batches - len(pending_batches),
             "failed_batches": 0,
             "errors": [],
         })
         _save_tagging_task(task)
 
-        if not pending_files:
+        if not pending_batches:
             applied = _apply_tagging_results_to_csv()
             task.update({
                 "status": "completed",
@@ -617,7 +979,7 @@ def _run_tagging_task(task_id: str) -> None:
         client = Anthropic(api_key=profile["api_key"], base_url=profile["base_url"])
         system_prompt = "你是严格遵循格式的财务分类专家。请只输出合法的 JSON 数组，不要夹杂任何 Markdown 标记、思考过程或其他废话。返回的必须是可直接解析的 JSON 字符串。"
 
-        for batch_file in pending_files:
+        for _batch_id, batch_dir, batch_file, batch in pending_batches:
             try:
                 response = client.messages.create(
                     model=profile["model"],
@@ -637,10 +999,7 @@ def _run_tagging_task(task_id: str) -> None:
                 if output_text.endswith("```"):
                     output_text = output_text[:-3]
                 result_json = json.loads(output_text.strip())
-                batch_file.with_name(f"{batch_file.stem}_result.json").write_text(
-                    json.dumps(result_json, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                _merge_result_items(_batch_result_file(batch_dir, batch), result_json)
                 task["completed_batches"] = int(task.get("completed_batches", 0)) + 1
             except Exception as exc:
                 task["failed_batches"] = int(task.get("failed_batches", 0)) + 1
@@ -782,9 +1141,12 @@ def uploads():
             incoming.save(target)
             saved_files.append(_upload_file_payload(target, user_id))
 
-        return jsonify({"files": saved_files})
+        batch = _save_uploaded_batch(saved_files) if saved_files else None
+        if batch:
+            saved_files = [_manifest_upload_payload(batch, file_info) for file_info in batch.get("files", [])]
+        return jsonify({"files": saved_files, "batch": {"id": batch["id"]} if batch else None})
 
-    files = [_upload_file_payload(path, user_id) for path, user_id in _iter_upload_files()]
+    files = [_manifest_upload_payload(batch, file_info) for batch, file_info in _active_upload_files()]
     return jsonify({"files": files})
 
 
@@ -797,6 +1159,7 @@ def manage_upload(relative_path):
             return jsonify({"error": "上传文件不存在"}), 404
 
         if request.method == "DELETE":
+            _update_upload_manifest_path(relative_path, None, active=False)
             source.unlink()
             return jsonify({"deleted": True, "relative_path": relative_path})
 
@@ -816,7 +1179,11 @@ def manage_upload(relative_path):
         target = _unique_upload_target(user_id, filename, current_path=source.resolve())
         if target.resolve() != source.resolve():
             source.replace(target)
-        return jsonify({"file": _upload_file_payload(target, user_id)})
+        updated_payload = _upload_file_payload(target, user_id)
+        updated_payload["active"] = True
+        _update_upload_manifest_path(relative_path, updated_payload, active=True)
+        batch = next((batch for batch, file_info in _active_upload_files() if file_info.get("relative_path") == updated_payload["relative_path"]), {})
+        return jsonify({"file": _manifest_upload_payload(batch, updated_payload)})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -827,7 +1194,7 @@ def process_data():
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
+        _df = _process_active_upload_batches()
         record_counts = _tagging_record_counts_from_df(_df)
         batch_counts = _tagging_batch_counts()
         return jsonify({
@@ -1121,13 +1488,18 @@ def update_transaction(tx_id):
     mask = df["transaction_id"] == tx_id
     if not mask.any():
         return jsonify({"error": "Transaction not found"}), 404
-        
+
+    matched_row = df[mask].iloc[0].copy()
     df.loc[mask, "global_category_l1"] = l1
     df.loc[mask, "global_category_l2"] = l2
     
     # Save back to CSV
     csv_path = Path(OUTPUT_DIR) / "processed_data.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    export_tag_overrides(df, str(OUTPUT_DIR / "tag_overrides.csv"))
+    matched_row["global_category_l1"] = l1
+    matched_row["global_category_l2"] = l2
+    _sync_manual_tag_to_batch_result(matched_row, l1, l2)
     
     return jsonify({"success": True})
 

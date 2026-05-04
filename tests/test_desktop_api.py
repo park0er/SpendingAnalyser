@@ -189,6 +189,86 @@ def test_uploaded_file_can_be_moved_to_another_user_and_platform(tmp_path, monke
     assert listed == [updated]
 
 
+def test_processing_rebuilds_dashboard_from_active_upload_batches(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    first_upload = client.post(
+        "/api/uploads",
+        data={
+            "platform": "alipay",
+            "user": "我",
+            "files": (io.BytesIO(b"first"), "first.csv"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()["files"][0]
+    client.post(
+        "/api/uploads",
+        data={
+            "platform": "jd",
+            "user": "老婆",
+            "files": (io.BytesIO(b"second"), "second.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    def fake_pipeline(_data_dir, output_dir, **_kwargs):
+        output_path = api_module.Path(output_dir)
+        batch_id = output_path.name
+        df = create_empty_uul()
+        df.loc[len(df)] = {
+            "source_platform": "alipay",
+            "user_id": "我",
+            "transaction_id": f"{batch_id}-tx",
+            "timestamp": "2026-01-01 10:00:00",
+            "direction": "支出",
+            "amount": 10.0,
+            "counterparty": "商户",
+            "description": "商品",
+            "payment_method": "",
+            "status": "交易成功",
+            "platform_category": "",
+            "platform_tx_type": "",
+            "original_tx_id": "",
+            "merchant_order_id": "",
+            "note": "",
+            "track": "consumption",
+            "is_refunded": False,
+            "refund_amount": 0.0,
+            "effective_amount": 10.0,
+            "is_ignored": False,
+            "global_category_l1": "",
+            "global_category_l2": "",
+        }
+        tagging_dir = output_path / "tagging_batches"
+        tagging_dir.mkdir(parents=True, exist_ok=True)
+        (tagging_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
+        (tagging_dir / "manifest.json").write_text(
+            json.dumps([{"file": str(tagging_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
+            encoding="utf-8",
+        )
+        output_path.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path / "processed_data.csv", index=False, encoding="utf-8-sig")
+        return df
+
+    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
+
+    first = client.post("/api/process")
+    first_status = client.get("/api/tagging/status").get_json()
+    first_dashboard = client.get("/api/summary").get_json()
+
+    delete_response = client.delete(f"/api/uploads/{first_upload['relative_path']}")
+    second = client.post("/api/process")
+    second_status = client.get("/api/tagging/status").get_json()
+    second_dashboard = client.get("/api/summary").get_json()
+
+    assert first.status_code == 200
+    assert first_status["batches"]["total"] == 2
+    assert first_dashboard["total_records"] == 2
+    assert delete_response.status_code == 200
+    assert second.status_code == 200
+    assert second_status["batches"]["total"] == 1
+    assert second_dashboard["total_records"] == 1
+
+
 def _write_processed_fixture(api_module, rows):
     df = create_empty_uul()
     for row in rows:
@@ -216,8 +296,75 @@ def _write_processed_fixture(api_module, rows):
             "global_category_l1": row.get("global_category_l1", ""),
             "global_category_l2": row.get("global_category_l2", ""),
         }
+        for extra_col in ["upload_batch_id", "upload_batch_row_index"]:
+            if extra_col in row:
+                df.at[len(df) - 1, extra_col] = row[extra_col]
     api_module.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+
+
+def test_manual_category_update_syncs_override_and_batch_result(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1", "upload_batch_id": "upload-1", "upload_batch_row_index": 0}])
+    batch_dir = api_module.OUTPUT_DIR / "upload_batches" / "upload-1" / "tagging_batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "manifest.json").write_text(
+        json.dumps([{"file": str(batch_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
+        encoding="utf-8",
+    )
+    (batch_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
+    (batch_dir / "batch_000_result.json").write_text(
+        json.dumps([{"index": 1, "l1": "餐饮美食", "l2": "外卖配送"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (api_module.OUTPUT_DIR / "upload_batches.json").write_text(
+        json.dumps({
+            "batches": [{
+                "id": "upload-1",
+                "active": True,
+                "files": [],
+                "status": "processed",
+                "output_dir": str(api_module.OUTPUT_DIR / "upload_batches" / "upload-1"),
+            }]
+        }),
+        encoding="utf-8",
+    )
+
+    response = client.put("/api/transactions/tx-1", json={"category_l1": "交通出行", "category_l2": "公共交通"})
+
+    assert response.status_code == 200
+    overrides = (api_module.OUTPUT_DIR / "tag_overrides.csv").read_text(encoding="utf-8")
+    result = json.loads((batch_dir / "batch_000_result.json").read_text(encoding="utf-8"))
+    tx = client.get("/api/transactions").get_json()["records"][0]
+    assert tx["category_l1"] == "交通出行"
+    assert tx["category_l2"] == "公共交通"
+    assert "tx-1" in overrides
+    assert "公共交通" in overrides
+    assert result == [{"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"}]
+
+
+def test_llm_result_merge_preserves_manual_batch_result(tmp_path, monkeypatch):
+    _client, api_module = make_client(tmp_path, monkeypatch)
+    result_file = api_module.OUTPUT_DIR / "upload_batches" / "upload-1" / "tagging_batches" / "batch_000_result.json"
+    result_file.parent.mkdir(parents=True)
+    result_file.write_text(
+        json.dumps([{"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    api_module._merge_result_items(
+        result_file,
+        [
+            {"index": 1, "l1": "餐饮美食", "l2": "外卖配送"},
+            {"index": 2, "l1": "购物消费", "l2": "日用百货"},
+        ],
+    )
+
+    result = json.loads(result_file.read_text(encoding="utf-8"))
+    assert result == [
+        {"index": 1, "l1": "交通出行", "l2": "公共交通", "source": "manual"},
+        {"index": 2, "l1": "购物消费", "l2": "日用百货"},
+    ]
 
 
 def test_apply_existing_tagging_results_updates_dashboard_data(tmp_path, monkeypatch):
