@@ -33,10 +33,15 @@
       {
         "from": "frontend/dist",
         "to": "frontend"
+      },
+      {
+        "from": "assets/logo.png",
+        "to": "assets/logo.png"
       }
     ],
     "mac": {
       "identity": null,
+      "icon": "assets/icon.icns",
       "target": [
         "dmg"
       ],

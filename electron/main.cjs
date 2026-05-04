@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, nativeImage } = require('electron');
 const { spawn } = require('child_process');
 const http = require('http');
 const net = require('net');
@@ -28,6 +28,10 @@ function resourcePath(...parts) {
     return path.join(process.resourcesPath, ...parts);
   }
   return path.join(__dirname, '..', ...parts);
+}
+
+function appIcon() {
+  return nativeImage.createFromPath(resourcePath('assets', 'logo.png'));
 }
 
 function waitForBackend(port, timeoutMs = 45000) {
@@ -62,12 +66,14 @@ function waitForBackend(port, timeoutMs = 45000) {
 }
 
 function createWindow() {
+  const icon = appIcon();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 980,
     minWidth: 1040,
     minHeight: 720,
     title: 'SpendingAnalyser',
+    icon: icon.isEmpty() ? undefined : icon,
     backgroundColor: '#0f1117',
     show: false,
     webPreferences: {
@@ -134,6 +140,10 @@ async function boot() {
 }
 
 app.whenReady().then(() => {
+  const icon = appIcon();
+  if (process.platform === 'darwin' && !icon.isEmpty()) {
+    app.dock.setIcon(icon);
+  }
   boot().catch((error) => {
     dialog.showErrorBox('SpendingAnalyser 启动失败', error.message);
     app.quit();

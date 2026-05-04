@@ -65,12 +65,9 @@ body {
   width: 42px;
   height: 42px;
   border-radius: 10px;
-  display: grid;
-  place-items: center;
+  display: block;
+  object-fit: cover;
   background: #e8eaf0;
-  color: #111827;
-  font-size: 14px;
-  font-weight: 800;
 }
 
 .brand-block h1 {
