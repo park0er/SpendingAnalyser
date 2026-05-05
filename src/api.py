@@ -574,6 +574,62 @@ def _apply_tagging_results_to_csv() -> int:
     return max(after_tagged - before_tagged, 0)
 
 
+def _anthropic_response_text(response) -> str:
+    output_text = ""
+    for block in getattr(response, "content", []) or []:
+        if getattr(block, "type", "") == "text":
+            output_text += getattr(block, "text", "") or ""
+    return output_text.strip()
+
+
+def _extract_json_array(output_text: str) -> list[dict]:
+    text = (output_text or "").strip()
+    if not text:
+        raise ValueError("LLM 返回空内容")
+
+    if text.startswith("```json"):
+        text = text[7:].strip()
+    elif text.startswith("```"):
+        text = text[3:].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+
+    if not text.startswith("["):
+        start = text.find("[")
+        end = text.rfind("]")
+        if start >= 0 and end > start:
+            text = text[start:end + 1]
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:160].replace("\n", " ")
+        raise ValueError(f"LLM 返回不是合法 JSON 数组：{preview}") from exc
+
+    if not isinstance(result, list):
+        raise ValueError("LLM 返回 JSON 不是数组")
+    return result
+
+
+def _request_tagging_batch(client, profile: dict, system_prompt: str, batch_file: Path) -> list[dict]:
+    last_error = None
+    prompt = batch_file.read_text(encoding="utf-8")
+    for attempt in range(1, 4):
+        try:
+            response = client.messages.create(
+                model=profile["model"],
+                max_tokens=4000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return _extract_json_array(_anthropic_response_text(response))
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                continue
+    raise last_error
+
+
 def _safe_upload_name(platform: str, original_name: str) -> str:
     clean_original = Path(original_name).name
     ext = Path(clean_original).suffix.lower()
@@ -852,24 +908,7 @@ def _run_tagging_task(task_id: str) -> None:
 
         for batch_file in pending_files:
             try:
-                response = client.messages.create(
-                    model=profile["model"],
-                    max_tokens=2000,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": batch_file.read_text(encoding="utf-8")}],
-                )
-                output_text = ""
-                for block in response.content:
-                    if block.type == "text":
-                        output_text += block.text
-                output_text = output_text.strip()
-                if output_text.startswith("```json"):
-                    output_text = output_text[7:]
-                if output_text.startswith("```"):
-                    output_text = output_text[3:]
-                if output_text.endswith("```"):
-                    output_text = output_text[:-3]
-                result_json = json.loads(output_text.strip())
+                result_json = _request_tagging_batch(client, profile, system_prompt, batch_file)
                 batch_file.with_name(f"{batch_file.stem}_result.json").write_text(
                     json.dumps(result_json, ensure_ascii=False, indent=2),
                     encoding="utf-8",

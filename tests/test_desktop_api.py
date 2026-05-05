@@ -478,6 +478,58 @@ def test_run_tagging_updates_active_processed_version(tmp_path, monkeypatch):
     assert versions[0]["status"] == "processed"
 
 
+def test_run_tagging_retries_empty_llm_response(tmp_path, monkeypatch):
+    client, api_module = make_client(tmp_path, monkeypatch)
+    _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
+    api_module._save_processed_version("待打标版本", status="pending_tagging")
+    batch_dir = api_module.OUTPUT_DIR / "tagging_batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "manifest.json").write_text(
+        json.dumps([{"file": str(batch_dir / "batch_000.txt"), "indices": [0], "count": 1}]),
+        encoding="utf-8",
+    )
+    (batch_dir / "batch_000.txt").write_text("prompt", encoding="utf-8")
+
+    calls = {"count": 0}
+
+    class FakeMessages:
+        def create(self, **_kwargs):
+            calls["count"] += 1
+            text = "" if calls["count"] == 1 else "```json\n[{\"index\": 1, \"l1\": \"餐饮美食\", \"l2\": \"堂食正餐\"}]\n```"
+            return types.SimpleNamespace(content=[types.SimpleNamespace(type="text", text=text)])
+
+    class FakeAnthropic:
+        def __init__(self, **_kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=FakeAnthropic))
+    client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Fake",
+            "api_key": "sk-fake",
+            "base_url": "https://example.test/anthropic",
+            "model": "fake-model",
+            "make_active": True,
+        },
+    )
+
+    response = client.post("/api/tagging/run")
+    latest = None
+    for _ in range(40):
+        latest = client.get("/api/tagging/status").get_json()["latest_task"]
+        if latest and latest["status"] not in {"queued", "running"}:
+            break
+        time.sleep(0.05)
+    tx = client.get("/api/transactions").get_json()["records"][0]
+
+    assert response.status_code == 200
+    assert latest["status"] == "completed"
+    assert calls["count"] == 2
+    assert tx["category_l1"] == "餐饮美食"
+    assert tx["category_l2"] == "堂食正餐"
+
+
 def test_apply_existing_tagging_results_updates_dashboard_data(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
     _write_processed_fixture(api_module, [{"transaction_id": "tx-1"}])
