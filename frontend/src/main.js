@@ -202,11 +202,11 @@ function renderUploads(files) {
     const list = document.getElementById('uploaded-list');
     const count = document.getElementById('upload-count');
     const userCount = new Set(files.map(file => file.user).filter(Boolean)).size;
-    count.textContent = files.length ? `${files.length} 个文件 · ${userCount || 1} 位用户` : '未上传文件';
+    count.textContent = files.length ? `待上传区：${files.length} 个文件 · ${userCount || 1} 位用户` : '待上传区为空';
     list.innerHTML = '';
 
     if (!files.length) {
-        list.innerHTML = '<div class="empty-upload">等待账单文件</div>';
+        list.innerHTML = '<div class="empty-upload">等待加入账单文件</div>';
         return;
     }
 
@@ -383,13 +383,13 @@ function setupDesktopWorkbench() {
         }
 
         try {
-            setStatus('upload-count', '上传中...', 'muted');
+            setStatus('upload-count', '加入中...', 'muted');
             window.localStorage.setItem('spending-analyser-upload-user', user);
             await api.uploadFiles(platform, user, fileInput.files);
             fileInput.value = '';
             pickerLabel.textContent = '选择文件';
             await loadDesktopState();
-            setStatus('workflow-status', '本批账单已提交，当前工作区已重置为这批文件。', 'ok');
+            setStatus('workflow-status', '已加入待上传区，可继续添加或编辑；确认生成后才会提交本批。', 'ok');
             switchView('workflow');
         } catch (err) {
             setStatus('upload-count', err.message, 'warn');
@@ -408,15 +408,15 @@ function setupDesktopWorkbench() {
             event.target.disabled = true;
             if (action === 'delete') {
                 await api.deleteUpload(relativePath);
-                setStatus('upload-count', '已删除，重新分析后生效', 'ok');
+                setStatus('upload-count', '已从待上传区删除', 'ok');
             } else if (action === 'save') {
                 const user = row.querySelector('.uploaded-user-input').value.trim();
                 const platform = row.querySelector('.uploaded-platform-select').value;
                 await api.updateUpload(relativePath, { user, platform });
-                setStatus('upload-count', '已保存，重新分析后生效', 'ok');
+                setStatus('upload-count', '待上传区记录已保存', 'ok');
             }
             await loadDesktopState();
-            setStatus('workflow-status', '本批上传记录已变更，请重新生成 Processed Data。', 'warn');
+            setStatus('workflow-status', '待上传区已更新，确认生成后会按当前列表处理。', 'warn');
         } catch (err) {
             setStatus('upload-count', err.message || '更新上传记录失败', 'warn');
         } finally {
@@ -500,6 +500,7 @@ function setupDesktopWorkbench() {
             await loadTaggingStatus();
             await loadDesktopState();
             await reloadDashboard();
+            setStatus('upload-count', '待上传区为空', 'ok');
             switchView('versions');
         } catch (err) {
             setStatus('workflow-status', err.message || '生成 Processed Data 失败', 'warn');

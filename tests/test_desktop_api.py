@@ -212,7 +212,7 @@ def test_uploaded_file_can_be_moved_to_another_user_and_platform(tmp_path, monke
     assert listed == [updated]
 
 
-def test_new_upload_clears_current_workspace_but_keeps_processed_versions(tmp_path, monkeypatch):
+def test_uploads_accumulate_until_process_confirm_then_clear_pending_area(tmp_path, monkeypatch):
     client, api_module = make_client(tmp_path, monkeypatch)
     version_dir = api_module.OUTPUT_DIR / "processed_versions" / "version-old"
     version_dir.mkdir(parents=True)
@@ -230,26 +230,80 @@ def test_new_upload_clears_current_workspace_but_keeps_processed_versions(tmp_pa
     old_file.parent.mkdir(parents=True)
     old_file.write_text("old", encoding="utf-8")
 
-    response = client.post(
+    first_upload = client.post(
+        "/api/uploads",
+        data={
+            "platform": "alipay",
+            "user": "我",
+            "files": (io.BytesIO(b"first"), "first.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+    second_upload = client.post(
         "/api/uploads",
         data={
             "platform": "wechat",
             "user": "老婆",
-            "files": (io.BytesIO(b"new"), "new.xlsx"),
+            "files": (io.BytesIO(b"second"), "second.xlsx"),
         },
         content_type="multipart/form-data",
     )
+    before_confirm = client.get("/api/uploads").get_json()["files"]
 
-    uploaded = response.get_json()["files"][0]
-    assert response.status_code == 200
-    assert uploaded["relative_path"].startswith("老婆/")
+    assert first_upload.status_code == 200
+    assert second_upload.status_code == 200
+    assert {file["user"] for file in before_confirm} == {"我", "老婆"}
+    assert {file["platform"] for file in before_confirm} == {"alipay", "wechat"}
+    assert old_file.exists()
+    assert (api_module.OUTPUT_DIR / "processed_data.csv").read_text(encoding="utf-8") == "current"
+    assert (batch_dir / "batch_000.txt").exists()
+
+    processed = create_empty_uul()
+    processed.loc[len(processed)] = {
+        "source_platform": "alipay",
+        "user_id": "我",
+        "transaction_id": "tx-1",
+        "timestamp": "2026-01-01 10:00:00",
+        "direction": "支出",
+        "amount": 10.0,
+        "counterparty": "商户A",
+        "description": "商品",
+        "payment_method": "",
+        "status": "交易成功",
+        "platform_category": "",
+        "platform_tx_type": "",
+        "original_tx_id": "",
+        "merchant_order_id": "",
+        "note": "",
+        "track": "consumption",
+        "is_refunded": False,
+        "refund_amount": 0.0,
+        "effective_amount": 10.0,
+        "is_ignored": False,
+        "global_category_l1": "",
+        "global_category_l2": "",
+    }
+
+    def fake_pipeline(data_dir, output_dir):
+        source_files = {path.name for path in api_module.Path(data_dir).glob("*/*")}
+        assert source_files == {"支付宝_first.csv", "支付宝_old.csv", "微信支付_second.xlsx"}
+        api_module.Path(output_dir).mkdir(parents=True, exist_ok=True)
+        processed.to_csv(api_module.OUTPUT_DIR / "processed_data.csv", index=False, encoding="utf-8-sig")
+        return processed
+
+    monkeypatch.setattr(api_module, "run_pipeline", fake_pipeline)
+
+    confirm = client.post("/api/process")
+    after_confirm = client.get("/api/uploads").get_json()["files"]
+
+    assert confirm.status_code == 200
+    assert after_confirm == []
     assert not old_file.exists()
-    assert not (api_module.OUTPUT_DIR / "processed_data.csv").exists()
     assert not (api_module.OUTPUT_DIR / "tagging_tasks.json").exists()
     assert not batch_dir.exists()
     versions = json.loads((api_module.OUTPUT_DIR / "processed_versions.json").read_text(encoding="utf-8"))
-    assert versions["active_id"] == ""
-    assert versions["versions"][0]["id"] == "version-old"
+    assert versions["active_id"] != "version-old"
+    assert "version-old" in {version["id"] for version in versions["versions"]}
     assert (version_dir / "processed_data.csv").read_text(encoding="utf-8") == "snapshot"
 
 

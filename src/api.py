@@ -504,6 +504,31 @@ def _reset_current_workspace() -> None:
         _write_processed_versions({"active_id": "", "versions": data.get("versions", [])})
 
 
+def _clear_pending_uploads() -> None:
+    if DATA_DIR.exists():
+        shutil.rmtree(DATA_DIR)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _reset_current_processing_outputs() -> None:
+    global _df
+    _df = None
+    for path in [
+        OUTPUT_DIR / "processed_data.csv",
+        OUTPUT_DIR / "tag_overrides.csv",
+        OUTPUT_DIR / "tagging_task.json",
+        TAGGING_TASKS_PATH,
+    ]:
+        if path.exists():
+            path.unlink()
+    batch_dir = OUTPUT_DIR / "tagging_batches"
+    if batch_dir.exists():
+        shutil.rmtree(batch_dir)
+    data = _read_processed_versions()
+    if data.get("active_id"):
+        _write_processed_versions({"active_id": "", "versions": data.get("versions", [])})
+
+
 def _reset_processing_intermediates() -> None:
     for path in [OUTPUT_DIR / "tagging_task.json", TAGGING_TASKS_PATH]:
         if path.exists():
@@ -1037,7 +1062,6 @@ def uploads():
         if not incoming_files:
             return jsonify({"error": "请选择要上传的账单文件"}), 400
 
-        _reset_current_workspace()
         user_dir = DATA_DIR / user_id
         user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1103,11 +1127,12 @@ def process_data():
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        _reset_processing_intermediates()
+        _reset_current_processing_outputs()
         _df = _normalise_df(run_pipeline(str(DATA_DIR), str(OUTPUT_DIR)))
         record_counts = _tagging_record_counts_from_df(_df)
         batch_counts = _tagging_batch_counts()
         processed_version = _save_processed_version(status="pending_tagging" if record_counts["pending_l2"] else "processed")
+        _clear_pending_uploads()
         return jsonify({
             "success": True,
             "has_data": not _df.empty,

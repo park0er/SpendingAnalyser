@@ -183,7 +183,7 @@
             <div class="panel-head">
               <div>
                 <h2>生成 Processed Data</h2>
-                <p id="workflow-status">开启新批次后，当前未完成的处理中间数据会被清空；历史 Processed Data 版本会保留。</p>
+                <p id="workflow-status">先把本轮账单加入待上传区；点击确认生成后，才会提交整批文件并生成 Processed Data。</p>
               </div>
               <span id="upload-count">未上传文件</span>
             </div>
@@ -191,7 +191,7 @@
               <div class="workflow-step active">
                 <span>1</span>
                 <strong>整批上传</strong>
-                <small>一次提交本次要分析的账单文件</small>
+                <small>可分多次加入不同渠道的文件</small>
               </div>
               <div class="workflow-step">
                 <span>2</span>
@@ -221,7 +221,7 @@
                 <input type="file" id="bill-files" multiple accept=".csv,.xlsx,.xls" />
                 <span id="file-picker-label">选择文件</span>
               </label>
-              <button class="btn-primary" id="btn-upload">上传</button>
+              <button class="btn-primary" id="btn-upload">加入待上传区</button>
             </div>
             <div class="uploaded-list" id="uploaded-list"></div>
             <div class="process-actions">
